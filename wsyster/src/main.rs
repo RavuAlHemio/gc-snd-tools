@@ -17,6 +17,18 @@ struct Opts {
     /// Enables more detailed logging.
     #[arg(short, long)]
     pub verbose: bool,
+
+    /// Skips WINF processing, which consists of wave extraction.
+    #[arg(long)]
+    pub skip_winf: bool,
+
+    /// Skips WBCT processing, which lists scenes, wave group IDs and wave IDs.
+    #[arg(long)]
+    pub skip_wbct: bool,
+
+    /// Enables debug output when decoding AFC ADPCM data.
+    #[arg(long)]
+    pub debug_afc: bool,
 }
 
 const AW_FILENAME_LENGTH: usize = 112;
@@ -54,6 +66,7 @@ fn afc_decode_chunk(
     output_samples: &mut [i16],
     lookback1: &mut i16,
     lookback2: &mut i16,
+    debug: bool,
 ) {
     assert_eq!(input_samples.len(), 9);
     assert_eq!(output_samples.len(), 16);
@@ -82,18 +95,24 @@ fn afc_decode_chunk(
 
     for i in 0..16 {
         let mut sample = (i64::from(delta) * i64::from(nibbles[i])) << 11;
-        println!();
-        println!("base sample: {}", sample);
-        println!(
-            "lb1={}, coef1={}, prod1={}, lb2={}, coef2={}, prod2={}",
-            i64::from(*lookback1), AFC_COEFFICIENTS[index].0, i64::from(*lookback1) * AFC_COEFFICIENTS[index].0,
-            i64::from(*lookback2), AFC_COEFFICIENTS[index].1, i64::from(*lookback2) * AFC_COEFFICIENTS[index].1,
-        );
+        if debug {
+            eprintln!();
+            eprintln!("base sample: {}", sample);
+            eprintln!(
+                "lb1={}, coef1={}, prod1={}, lb2={}, coef2={}, prod2={}",
+                i64::from(*lookback1), AFC_COEFFICIENTS[index].0, i64::from(*lookback1) * AFC_COEFFICIENTS[index].0,
+                i64::from(*lookback2), AFC_COEFFICIENTS[index].1, i64::from(*lookback2) * AFC_COEFFICIENTS[index].1,
+            );
+        }
         sample += i64::from(*lookback1) * AFC_COEFFICIENTS[index].0;
         sample += i64::from(*lookback2) * AFC_COEFFICIENTS[index].1;
-        println!("with lookback: {}", sample);
+        if debug {
+            eprintln!("with lookback: {}", sample);
+        }
         sample >>= 11;
-        println!("downshifted: {}", sample);
+        if debug {
+            eprintln!("downshifted: {}", sample);
+        }
 
         // clamp
         let final_sample = if sample > 32767 {
@@ -117,6 +136,7 @@ fn dump_afc<R: Read + Seek>(
     size: u32,
     sample_rate: u16,
     file_name: &str,
+    debug_afc: bool,
 ) {
     aw_file.seek(SeekFrom::Start(offset.into()))
         .expect("failed to seek to wave data in .aw file");
@@ -142,6 +162,7 @@ fn dump_afc<R: Read + Seek>(
             &mut pcm,
             &mut lookback1,
             &mut lookback2,
+            debug_afc,
         );
 
         // spit out the samples as little-endian (because RIFF)
@@ -200,23 +221,8 @@ fn dump_afc<R: Read + Seek>(
         .expect("failed to flush .wav file");
 }
 
-fn process_wsys<R: Read + Seek>(wsys: &mut R, verbose: bool) {
-    let mut wsys_magic_buf = [0u8; 4];
-    wsys.read_exact(&mut wsys_magic_buf)
-        .expect("failed to read magic from .wsys file");
-    if &wsys_magic_buf != b"WSYS" {
-        panic!("unexpected magic; is the .wsys file a WSYS file?");
-    }
-
-    // skip three u32s we aren't interested in
-    wsys.seek(SeekFrom::Current(12))
-        .expect("failed to skip part of .wsys file header");
-
-    // read, then seek to, WINF offset
-    let mut winf_offset_buf = [0u8; 4];
-    wsys.read_exact(&mut winf_offset_buf)
-        .expect("failed to read WINF offset from .wsys file");
-    let winf_offset = u32::from_be_bytes(winf_offset_buf);
+fn process_winf<R: Read + Seek>(wsys: &mut R, verbose: bool, winf_offset: u32, debug_afc: bool) {
+    // seek to the WINF offset
     wsys.seek(SeekFrom::Start(winf_offset.into()))
         .expect("failed to seek to WINF offset within .wsys file");
 
@@ -310,8 +316,144 @@ fn process_wsys<R: Read + Seek>(wsys: &mut R, verbose: bool) {
                 afc_size,
                 sample_rate,
                 &wav_filename,
+                debug_afc,
             );
         }
+    }
+}
+
+fn process_wbct<R: Read + Seek>(wsys: &mut R, verbose: bool, wbct_offset: u32) {
+    // seek to the WBCT offset
+    wsys.seek(SeekFrom::Start(wbct_offset.into()))
+        .expect("failed to seek to WBCT offset within .wsys file");
+
+    let mut wbct_magic_buf = [0u8; 4];
+    wsys.read_exact(&mut wbct_magic_buf)
+        .expect("failed to read WBCT magic bytes from .wsys file");
+    if &wbct_magic_buf != b"WBCT" {
+        panic!("unexpected value at .wsys file offset {}; expected b'WBCT'", wbct_offset);
+    }
+
+    // four FFs
+    let mut nevermind_buf = [0u8; 4];
+    wsys.read_exact(&mut nevermind_buf)
+        .expect("failed to read WBCT four-FFs from .wsys file");
+
+    let mut scene_count_buf = [0u8; 4];
+    wsys.read_exact(&mut scene_count_buf)
+        .expect("failed to read number of scenes");
+    let scene_count = u32::from_be_bytes(scene_count_buf);
+    if verbose {
+        eprintln!("{} scenes", scene_count);
+    }
+
+    for scene_i in 0..scene_count {
+        // seek to the corresponding offset entry
+        wsys.seek(SeekFrom::Start(u64::from(wbct_offset + 12 + scene_i*4)))
+            .expect("failed to seek to scene entry");
+
+        // each of these entries is itself an offset to scene data
+        let mut scene_offset_buf = [0u8; 4];
+        wsys.read_exact(&mut scene_offset_buf)
+            .expect("failed to read scene offset from .wsys");
+        let scene_offset = u32::from_be_bytes(scene_offset_buf);
+
+        wsys.seek(SeekFrom::Start(scene_offset.into()))
+            .expect("failed to seek to scene metadata");
+
+        // magic first
+        let mut scene_magic_buf = [0u8; 4];
+        wsys.read_exact(&mut scene_magic_buf)
+            .expect("failed to read scene magic");
+        if &scene_magic_buf != b"SCNE" {
+            panic!("scene's magic is not b\"SCNE\"");
+        }
+
+        // eight bytes of padding
+        let mut padding_buf = [0u8; 8];
+        wsys.read_exact(&mut padding_buf)
+            .expect("failed to read scene padding");
+
+        // C-DF offset
+        let mut offset_buf = [0u8; 4];
+        wsys.read_exact(&mut offset_buf)
+            .expect("failed to read C-DF offset");
+        let cdf_offset = u32::from_be_bytes(offset_buf);
+
+        // this is followed by the C-EX and C-ST offsets,
+        // but those blocks are always empty
+
+        // seek to the C-DF block
+        wsys.seek(SeekFrom::Start(cdf_offset.into()))
+            .expect("failed to seek to C-DF data");
+
+        let mut cdf_magic_buf = [0u8; 4];
+        wsys.read_exact(&mut cdf_magic_buf)
+            .expect("failed to read C-DF magic");
+        if &cdf_magic_buf != b"C-DF" {
+            panic!("C-DF block's magic is not b\"C-DF\"");
+        }
+
+        let mut wave_id_count_buf = [0u8; 4];
+        wsys.read_exact(&mut wave_id_count_buf)
+            .expect("failed to read wave ID count");
+        let wave_id_count = u32::from_be_bytes(wave_id_count_buf);
+        for wave_i in 0..wave_id_count {
+            // seek to the corresponding offset entry
+            wsys.seek(SeekFrom::Start(u64::from(cdf_offset + 8 + wave_i*4)))
+                .expect("failed to seek to wave ID offset entry");
+
+            // get the actual offset
+            let mut wave_id_offset_buf = [0u8; 4];
+            wsys.read_exact(&mut wave_id_offset_buf)
+                .expect("failed to read wave ID offset");
+            let wave_id_offset = u32::from_be_bytes(wave_id_offset_buf);
+
+            // go there
+            wsys.seek(SeekFrom::Start(wave_id_offset.into()))
+                .expect("failed to seek to wave ID");
+
+            // read
+            let mut wave_id_buf = [0u8; 4];
+            wsys.read_exact(&mut wave_id_buf)
+                .expect("failed to read wave ID");
+            let wave_group_id = u16::from_be_bytes(wave_id_buf[0..2].try_into().unwrap());
+            let wave_id = u16::from_be_bytes(wave_id_buf[2..4].try_into().unwrap());
+
+            println!(
+                "scene {} entry {} ({:08X}): wavegroup {} wave {}",
+                scene_i, wave_i, wave_i, wave_group_id, wave_id,
+            );
+        }
+    }
+}
+
+fn process_wsys<R: Read + Seek>(wsys: &mut R, verbose: bool, skip_winf: bool, skip_wbct: bool, debug_afc: bool) {
+    let mut wsys_magic_buf = [0u8; 4];
+    wsys.read_exact(&mut wsys_magic_buf)
+        .expect("failed to read magic from .wsys file");
+    if &wsys_magic_buf != b"WSYS" {
+        panic!("unexpected magic; is the .wsys file a WSYS file?");
+    }
+
+    // skip three u32s we aren't interested in
+    wsys.seek(SeekFrom::Current(12))
+        .expect("failed to skip part of .wsys file header");
+
+    // read the WINF and WBCT offsets
+    let mut offset_buf = [0u8; 4];
+    wsys.read_exact(&mut offset_buf)
+        .expect("failed to read WINF offset from .wsys file");
+    let winf_offset = u32::from_be_bytes(offset_buf);
+    wsys.read_exact(&mut offset_buf)
+        .expect("failed to read WBCT offset from .wsys file");
+    let wbct_offset = u32::from_be_bytes(offset_buf);
+
+    if !skip_winf {
+        process_winf(wsys, verbose, winf_offset, debug_afc);
+    }
+    if !skip_wbct {
+        process_wbct(wsys, verbose, wbct_offset);
     }
 }
 
@@ -320,5 +462,5 @@ fn main() {
 
     let mut wsys_file = File::open(&opts.wsys_path)
         .expect("failed to open .wsys file");
-    process_wsys(&mut wsys_file, opts.verbose);
+    process_wsys(&mut wsys_file, opts.verbose, opts.skip_winf, opts.skip_wbct, opts.debug_afc);
 }
