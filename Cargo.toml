@@ -2,5 +2,6 @@
 members = [
     "baad",
     "bst",
+    "wsyster",
 ]
 resolver = "3"
