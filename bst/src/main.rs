@@ -56,7 +56,16 @@ fn traverse<B: Read + Seek, N: Read + Seek>(
         bst_reader.read_exact(&mut bst_number_buf)
             .expect("file entry in .bst file truncated");
         let bst_number = u32::from_be_bytes(bst_number_buf);
-        println!("[{:08X}]={:08X}={:08X}\t{}{}", leaf_addr, bst_offset, bst_number, dir_name, filename_str);
+        bst_reader.read_exact(&mut bst_number_buf)
+            .expect("file entry in .bst file truncated");
+        let bst_other_number = u32::from_be_bytes(bst_number_buf);
+        bst_reader.read_exact(&mut bst_number_buf)
+            .expect("file entry in .bst file truncated");
+        let bst_third_number = u32::from_be_bytes(bst_number_buf);
+        println!(
+            "[{:08X}]=>{:08X}: {:08X} {:08X} {:08X}\t{}{}",
+            leaf_addr, bst_offset, bst_number, bst_other_number, bst_third_number, dir_name, filename_str,
+        );
         return;
     }
 
