@@ -3,6 +3,7 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::PathBuf;
 
 use clap::Parser;
+use gcst_common::end_at_first_zero;
 
 
 /// Reads a .bst file and its corresponding .bstn file and outputs the directory structure.
@@ -21,15 +22,6 @@ struct Opts {
 
 
 const FILENAME_SIZE: usize = 256;
-
-
-fn end_at_first_zero(buf: &[u8]) -> &[u8] {
-    let zero_pos = buf.iter().position(|b| *b == 0x00);
-    match zero_pos {
-        Some(pos) => &buf[0..pos],
-        None => buf,
-    }
-}
 
 
 fn traverse<B: Read + Seek, N: Read + Seek>(

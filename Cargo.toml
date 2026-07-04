@@ -2,6 +2,7 @@
 members = [
     "baad",
     "bst",
+    "gcst-common",
     "wsyster",
 ]
 resolver = "3"

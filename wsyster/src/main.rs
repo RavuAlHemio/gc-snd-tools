@@ -3,6 +3,7 @@ use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 
 use clap::Parser;
+use gcst_common::end_at_first_zero;
 
 
 /// Reads a .wsys file and its assortment of .aw files, decoding each entry from AFC ADPCM to
@@ -51,14 +52,6 @@ const AFC_COEFFICIENTS: [(i64, i64); 16] = [
     (-0x0400,  0x0000),
     (-0x0800,  0x0000),
 ];
-
-fn end_at_first_zero(buf: &[u8]) -> &[u8] {
-    let zero_pos = buf.iter().position(|b| *b == 0x00);
-    match zero_pos {
-        Some(pos) => &buf[0..pos],
-        None => buf,
-    }
-}
 
 /// Decodes a chunk of AFC ADPCM audio into linear PCM.
 fn afc_decode_chunk(
