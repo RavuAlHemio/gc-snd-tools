@@ -547,9 +547,10 @@ pub enum Event {
         callback_value: Value,
     },
     // 0xFA-0xFC: NULL
-    Print {
+    Printf {
         // 0xFD
         string: Vec<u8>, // NUL-terminated
+        args: Vec<u8>, // 1 '%' byte in string = 1 byte of args
     },
     Nop, // 0xFE
     Finish, // 0xFF
@@ -1054,7 +1055,7 @@ fn read_command<R: Read + Seek>(reader: &mut R, cmd: u8, reg_bits_lsb: u8) -> Re
         },
         0xFD => {
             // !!! this operation is a stream reader:
-            // the format string is taken from the stream
+            // the format string and some arguments are taken from the stream
             assert_eq!(param_values.len(), 0);
             let mut string = Vec::new();
             loop {
@@ -1065,7 +1066,20 @@ fn read_command<R: Read + Seek>(reader: &mut R, cmd: u8, reg_bits_lsb: u8) -> Re
                 }
                 string.push(b);
             }
-            Ok(Event::Print { string })
+
+            // the number of % characters in the format string
+            // is the number of bytes to read additionally
+            let percent_count = string
+                .iter()
+                .filter(|b| **b == b'%')
+                .count();
+            let mut args = vec![0u8; percent_count];
+            reader.read_exact(&mut args)?;
+
+            Ok(Event::Printf {
+                string,
+                args,
+            })
         },
         0xFE => {
             assert_eq!(param_values.len(), 0);
