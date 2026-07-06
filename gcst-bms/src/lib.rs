@@ -653,7 +653,7 @@ pub fn read_event<R: Read + Seek>(reader: &mut R) -> Result<Event, io::Error> {
         },
         0x90..=0x9F => {
             // command with register indirection
-            let param_count = cmd & 0b111;
+            let param_count = (cmd & 0b111) + 1;
             // (yes, bit 1<<3 is dropped)
             let mut params = [0u8; 2];
             reader.read_exact(&mut params)?;
