@@ -927,6 +927,15 @@ fn read_command<R: Read + Seek>(reader: &mut R, cmd: u8, reg_bits_lsb: u8) -> Re
                 register: param_values[1],
             })
         },
+        0xDC => {
+            assert_eq!(param_values.len(), 4);
+            Ok(Event::RegisterTableLoad {
+                access_mode: param_values[0],
+                destination: param_values[1],
+                offset: param_values[2],
+                index: param_values[3],
+            })
+        },
         0xE0 => {
             assert_eq!(param_values.len(), 1);
             Ok(Event::Tempo {
