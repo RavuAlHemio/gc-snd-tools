@@ -1,9 +1,10 @@
+use std::collections::BTreeSet;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::PathBuf;
 
 use clap::Parser;
-use gcst_bms;
+use gcst_bms::{self, Event};
 
 
 /// Dumps the contents of a .bsc file.
@@ -11,6 +12,90 @@ use gcst_bms;
 struct Opts {
     /// Path to the .bsc file.
     pub bsc_path: PathBuf,
+}
+
+fn print_depth_prefix(depth: usize) {
+    for _ in 0..depth {
+        print!("  ");
+    }
+}
+
+fn output_sequence(bsc_file: &mut File) {
+    let mut call_stack = Vec::new();
+    let mut jumped_here_before = BTreeSet::new();
+    loop {
+        let ev = gcst_bms::read_event(bsc_file)
+            .expect("failed to read BMS event");
+
+        let depth = 2 + call_stack.len();
+        print_depth_prefix(depth);
+        println!("{:?}", ev);
+
+        match &ev {
+            Event::Call { target } => {
+                if let Some(target_u32) = target.as_u32() {
+                    let return_here = bsc_file.seek(SeekFrom::Current(0))
+                        .expect("failed to obtain current position");
+                    call_stack.push(return_here);
+                    bsc_file.seek(SeekFrom::Start(target_u32.into()))
+                        .expect("failed to seek to call destination");
+                } else {
+                    // we eventually continue from here,
+                    // so no need to break out
+                }
+            },
+            Event::Jump { target } => {
+                if let Some(target_u32) = target.as_u32() {
+                    if jumped_here_before.insert(target_u32) {
+                        bsc_file.seek(SeekFrom::Start(target_u32.into()))
+                            .expect("failed to seek to jump destination");
+                    } else {
+                        print_depth_prefix(depth);
+                        println!("(and we loop)");
+                        break;
+                    }
+                } else {
+                    // we don't know where we jumped; it's over for us
+                    print_depth_prefix(depth);
+                    println!("the trail goes cold");
+                    break;
+                }
+            },
+            Event::JumpTable { .. } => {
+                print_depth_prefix(depth);
+                println!("the trail goes cold");
+                break;
+            },
+            Event::Return => {
+                let return_there = call_stack.pop()
+                    .expect("returning from an empty call stack?!");
+                bsc_file.seek(SeekFrom::Start(return_there))
+                    .expect("failed to go back to return address");
+            },
+            Event::Finish => {
+                if let Some(return_there) = call_stack.pop() {
+                    bsc_file.seek(SeekFrom::Start(return_there))
+                        .expect("failed to go back to return address at finish");
+                } else {
+                    break;
+                }
+            },
+            Event::OpenTrack { track_pointer, .. } => {
+                // act like this is a Call
+                if let Some(target_u32) = track_pointer.as_u32() {
+                    let return_here = bsc_file.seek(SeekFrom::Current(0))
+                        .expect("failed to obtain current position");
+                    call_stack.push(return_here);
+                    bsc_file.seek(SeekFrom::Start(target_u32.into()))
+                        .expect("failed to seek to open-track destination");
+                } else {
+                    // we eventually continue from here,
+                    // so no need to break out
+                }
+            },
+            _ => {},
+        }
+    }
 }
 
 
@@ -71,14 +156,7 @@ fn main() {
             println!("  offset {:010X}", offset);
             bsc_file.seek(SeekFrom::Start((*offset).into()))
                 .expect("failed to seek to BMS data");
-            loop {
-                let ev = gcst_bms::read_event(&mut bsc_file)
-                    .expect("failed to read BMS event");
-                println!("    {:?}", ev);
-                if ev.ends_song() {
-                    break;
-                }
-            }
+            output_sequence(&mut bsc_file);
         }
     }
 }

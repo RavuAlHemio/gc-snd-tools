@@ -30,6 +30,15 @@ impl Value {
             Self::RegisterRead(_) => ValueType::RegisterRead,
         }
     }
+
+    pub fn as_u32(&self) -> Option<u32> {
+        match self {
+            Self::Immediate8(val) => Some((*val).into()),
+            Self::Immediate16(val) => Some((*val).into()),
+            Self::Immediate24(val) => Some((*val).into()),
+            Self::RegisterRead(_) => None,
+        }
+    }
 }
 
 
@@ -549,12 +558,6 @@ pub enum Event {
 impl Default for Event {
     fn default() -> Self {
         Self::Nop
-    }
-}
-impl Event {
-    /// Returns whether this command ends the song.
-    pub fn ends_song(&self) -> bool {
-        matches!(self, Self::Finish)
     }
 }
 
