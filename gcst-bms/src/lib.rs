@@ -298,7 +298,8 @@ pub enum Event {
         // 0x81-0x87
         voice: u8,
     },
-    // 0x88-0x9F: unknown
+    // 0x88-0x8F: unknown
+    // 0x90-0x9F: run command with register indirection
     // 0xA0-0xAF: NULL
     // 0xB0: extended opcodes (see bottom of enum)
     IndirectNoteOn {
