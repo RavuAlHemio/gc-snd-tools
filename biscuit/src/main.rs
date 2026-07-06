@@ -12,6 +12,10 @@ use gcst_bms::{self, Event};
 struct Opts {
     /// Path to the .bsc file.
     pub bsc_path: PathBuf,
+
+    /// Ignore this offset in the .bsc file when outputting all banks. Can be specified multiple times.
+    #[arg(short, long)]
+    pub ignore_offset: Vec<u32>,
 }
 
 fn print_depth_prefix(depth: usize) {
@@ -153,7 +157,11 @@ fn main() {
     for table in &per_table_offsets {
         println!("table start");
         for offset in table {
-            println!("  offset {:010X}", offset);
+            println!("  offset {:#010X} ({})", offset, offset);
+            if opts.ignore_offset.contains(offset) {
+                println!("    ignoring as requested");
+                continue;
+            }
             bsc_file.seek(SeekFrom::Start((*offset).into()))
                 .expect("failed to seek to BMS data");
             output_sequence(&mut bsc_file);
