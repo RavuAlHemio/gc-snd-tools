@@ -1,7 +1,9 @@
 [workspace]
 members = [
     "baad",
+    "biscuit",
     "bst",
+    "gcst-bms",
     "gcst-common",
     "wsyster",
 ]

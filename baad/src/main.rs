@@ -3,6 +3,7 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use clap::Parser;
+use gcst_common::ReadExt;
 
 
 /// Reads and extracts the components of a .baa file, including .bst and .bstn, into the directory
@@ -142,14 +143,13 @@ fn extract_type_offset<R: Read + Seek>(
         );
     }
 
-    let mut length_buf = [0u8; 4];
-    if let Err(e) = reader.read_exact(&mut length_buf) {
-        panic!(
+    let length = match reader.read_u32_be() {
+        Ok(l) => l,
+        Err(e) => panic!(
             "failed to read length of {} chunk: {}",
             chunk_type, e,
-        );
-    }
-    let length = u32::from_be_bytes(length_buf);
+        ),
+    };
 
     let subtype_string = if let Some(ctr) = counter {
         // append current counter value to subtype, then increment
