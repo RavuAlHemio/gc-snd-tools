@@ -1,0 +1,9 @@
+[package]
+name = "banker"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+clap = { version = "4.6.1", features = ["derive"] }
+gcst-common = { path = "../gcst-common" }
+ordered-float = { version = "5.3" }

@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "baad",
+    "banker",
     "biscuit",
     "bst",
     "gcst-bms",

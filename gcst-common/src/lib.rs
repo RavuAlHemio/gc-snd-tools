@@ -18,6 +18,14 @@ pub trait ReadExt {
     /// If reading fails, the function returns the error it encountered. Once reading succeeds, this
     /// function is guaranteed to succeed; decoding the integer itself cannot fail.
     fn read_u32_be(&mut self) -> Result<u32, io::Error>;
+
+    /// Reads a big-endian 32-bit floating-point number (IEEE binary32) from the stream.
+    ///
+    /// Big endian is the byte order where the most significant byte appears first.
+    ///
+    /// If reading fails, the function returns the error it encountered. Once reading succeeds, this
+    /// function is guaranteed to succeed; decoding the integer itself cannot fail.
+    fn read_f32_be(&mut self) -> Result<f32, io::Error>;
 }
 impl<R: io::Read> ReadExt for R {
     fn read_u16_be(&mut self) -> Result<u16, io::Error> {
@@ -30,6 +38,12 @@ impl<R: io::Read> ReadExt for R {
         let mut buf = [0u8; 4];
         self.read_exact(&mut buf)?;
         Ok(u32::from_be_bytes(buf))
+    }
+
+    fn read_f32_be(&mut self) -> Result<f32, io::Error> {
+        let mut buf = [0u8; 4];
+        self.read_exact(&mut buf)?;
+        Ok(f32::from_be_bytes(buf))
     }
 }
 
