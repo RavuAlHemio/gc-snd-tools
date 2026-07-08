@@ -16,6 +16,12 @@ struct Opts {
     /// Ignore this offset in the .bsc file when outputting all banks. Can be specified multiple times.
     #[arg(short, long)]
     pub ignore_offset: Vec<u32>,
+
+    /// Stops processing the current sequence when a RegisterTableLoad operation is hit.
+    ///
+    /// These operations seem to be a source of misparses for whatever reason.
+    #[arg(long)]
+    pub stop_at_register_table_load: bool,
 }
 
 fn print_depth_prefix(depth: usize) {
@@ -24,7 +30,7 @@ fn print_depth_prefix(depth: usize) {
     }
 }
 
-fn output_sequence(bsc_file: &mut File) {
+fn output_sequence(bsc_file: &mut File, stop_at_register_table_load: bool) {
     let mut call_stack = Vec::new();
     let mut jumped_here_before = BTreeSet::new();
     loop {
@@ -97,6 +103,11 @@ fn output_sequence(bsc_file: &mut File) {
                     // so no need to break out
                 }
             },
+            Event::RegisterTableLoad { .. } if stop_at_register_table_load => {
+                print_depth_prefix(depth);
+                println!("oh no, my most powerful enemy");
+                break;
+            },
             _ => {},
         }
     }
@@ -164,7 +175,7 @@ fn main() {
             }
             bsc_file.seek(SeekFrom::Start((*offset).into()))
                 .expect("failed to seek to BMS data");
-            output_sequence(&mut bsc_file);
+            output_sequence(&mut bsc_file, opts.stop_at_register_table_load);
         }
     }
 }
