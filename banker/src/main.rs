@@ -31,9 +31,9 @@ enum BankSection {
     Oscillators {
         oscillators: Vec<Oscillator>,
     },
-    PercussionMaps {
-        percussion_maps: Vec<PercussionMap>,
-    },
+    List {
+        list_items: Vec<BankListItem>,
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -88,21 +88,31 @@ struct Instrument {
     pub pitch: OrderedFloat<f32>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 struct Percussion {
-
+    pub percussion_maps: Vec<Option<PercussionMap>>,
 }
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 struct KeyRegion {
     pub high_key_raw: u32,
-    // additional_u32_count: u32,
-    pub additional_u32s: Vec<u32>,
+    // velocity_region_count: u32,
+    pub velocity_regions: Vec<VelocityRegion>,
 }
 impl KeyRegion {
     pub fn high_key(&self) -> u32 {
         self.high_key_raw >> 0x18
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+struct VelocityRegion {
+    pub velocity: u8,
+    pub padding: [u8; 3],
+    pub wave_system_id: u16,
+    pub wave_id: u16,
+    pub volume: OrderedFloat<f32>,
+    pub pitch: OrderedFloat<f32>,
 }
 
 
@@ -282,49 +292,7 @@ fn main() {
             },
             b"PMAP" => {
                 // Percussion MAPs
-                let pmap_count: usize = section_cursor.read_u32_be()
-                    .expect("failed to read percussion-map count from PMAP section of .bnk file")
-                    .try_into().unwrap();
-                let mut percussion_maps = Vec::new();
-                for _ in 0..pmap_count {
-                    section_cursor.read_exact(&mut magic_buf)
-                        .expect("failed to read Pmap magic from .bnk file");
-                    if &magic_buf != b"Pmap" {
-                        eprintln!("PMAP section has non-Pmap chunk; giving up on the section");
-                        break;
-                    }
-
-                    let unknown0: u32 = section_cursor.read_u32_be()
-                        .expect("failed to obtain percussion map unknown value 0");
-                    let unknown1: u32 = section_cursor.read_u32_be()
-                        .expect("failed to obtain percussion map unknown value 1");
-                    let unknown2: u32 = section_cursor.read_u32_be()
-                        .expect("failed to obtain percussion map unknown value 2");
-                    let unknown3: u32 = section_cursor.read_u32_be()
-                        .expect("failed to obtain percussion map unknown value 3");
-                    let unknown4: u32 = section_cursor.read_u32_be()
-                        .expect("failed to obtain percussion map unknown value 4");
-                    let unknown5: u32 = section_cursor.read_u32_be()
-                        .expect("failed to obtain percussion map unknown value 5");
-                    let unknown6: u32 = section_cursor.read_u32_be()
-                        .expect("failed to obtain percussion map unknown value 6");
-                    let unknown7: u32 = section_cursor.read_u32_be()
-                        .expect("failed to obtain percussion map unknown value 7");
-                    let unknown8: u32 = section_cursor.read_u32_be()
-                        .expect("failed to obtain percussion map unknown value 8");
-                    percussion_maps.push(PercussionMap {
-                        unknown0,
-                        unknown1,
-                        unknown2,
-                        unknown3,
-                        unknown4,
-                        unknown5,
-                        unknown6,
-                        unknown7,
-                        unknown8,
-                    });
-                }
-                sections.push(BankSection::PercussionMaps { percussion_maps });
+                // don't do anything yet; these are referenced from the PERC block
             },
             b"PERC" => {
                 // PERCussion
@@ -379,18 +347,26 @@ fn main() {
                             for _ in 0..key_region_count {
                                 let high_key_raw = bnk_file.read_u32_be()
                                     .expect("failed to read high-key value from Inst chunk");
-                                let additional_u32_count: usize = bnk_file.read_u32_be()
-                                    .expect("failed to read additional-u32-count from Inst chunk")
+                                let velocity_region_count: usize = bnk_file.read_u32_be()
+                                    .expect("failed to read velocity region count from Inst chunk")
                                     .try_into().unwrap();
-                                let mut additional_u32s = Vec::with_capacity(additional_u32_count);
-                                for _ in 0..additional_u32_count {
-                                    let additional_u32 = bnk_file.read_u32_be()
-                                        .expect("failed to read key region's additional u32 from Inst chunk");
-                                    additional_u32s.push(additional_u32);
+                                let mut velocity_regions = Vec::with_capacity(velocity_region_count);
+                                for _ in 0..velocity_region_count {
+                                    let mut velocity_region_buf = [0u8; 16];
+                                    bnk_file.read_exact(&mut velocity_region_buf)
+                                        .expect("failed to read velocity region from Inst chunk");
+                                    velocity_regions.push(VelocityRegion {
+                                        velocity: velocity_region_buf[0],
+                                        padding: velocity_region_buf[1..4].try_into().unwrap(),
+                                        wave_system_id: u16::from_be_bytes(velocity_region_buf[4..6].try_into().unwrap()),
+                                        wave_id: u16::from_be_bytes(velocity_region_buf[6..8].try_into().unwrap()),
+                                        volume: OrderedFloat(f32::from_be_bytes(velocity_region_buf[8..12].try_into().unwrap())),
+                                        pitch: OrderedFloat(f32::from_be_bytes(velocity_region_buf[12..16].try_into().unwrap())),
+                                    });
                                 }
                                 key_regions.push(KeyRegion {
                                     high_key_raw,
-                                    additional_u32s,
+                                    velocity_regions,
                                 });
                             }
 
@@ -412,11 +388,72 @@ fn main() {
                             }));
                         },
                         b"Perc" => {
+                            let percussion_count: usize = bnk_file.read_u32_be()
+                                .expect("failed to read percussion count from Perc chunk")
+                                .try_into().unwrap();
+                            let mut percussion_offsets = Vec::with_capacity(percussion_count);
+                            for _ in 0..percussion_count {
+                                let offset = bnk_file.read_u32_be()
+                                    .expect("failed to read percussion offset from Perc chunk");
+                                percussion_offsets.push(offset);
+                            }
 
+                            let mut percussion_maps = Vec::with_capacity(percussion_offsets.len());
+                            for percussion_offset in &percussion_offsets {
+                                if *percussion_offset == 0 {
+                                    percussion_maps.push(None);
+                                    continue;
+                                }
+
+                                bnk_file.seek(SeekFrom::Start((*percussion_offset).into()))
+                                    .expect("failed to seek to percussion offset from Perc chunk");
+
+                                bnk_file.read_exact(&mut magic_buf)
+                                    .expect("failed to read magic of value pointed to by offset in Perc chunk");
+                                match magic_buf.as_slice() {
+                                    b"Pmap" => {
+                                        let unknown0: u32 = bnk_file.read_u32_be()
+                                            .expect("failed to obtain percussion map unknown value 0");
+                                        let unknown1: u32 = bnk_file.read_u32_be()
+                                            .expect("failed to obtain percussion map unknown value 1");
+                                        let unknown2: u32 = bnk_file.read_u32_be()
+                                            .expect("failed to obtain percussion map unknown value 2");
+                                        let unknown3: u32 = bnk_file.read_u32_be()
+                                            .expect("failed to obtain percussion map unknown value 3");
+                                        let unknown4: u32 = bnk_file.read_u32_be()
+                                            .expect("failed to obtain percussion map unknown value 4");
+                                        let unknown5: u32 = bnk_file.read_u32_be()
+                                            .expect("failed to obtain percussion map unknown value 5");
+                                        let unknown6: u32 = bnk_file.read_u32_be()
+                                            .expect("failed to obtain percussion map unknown value 6");
+                                        let unknown7: u32 = bnk_file.read_u32_be()
+                                            .expect("failed to obtain percussion map unknown value 7");
+                                        let unknown8: u32 = bnk_file.read_u32_be()
+                                            .expect("failed to obtain percussion map unknown value 8");
+                                        percussion_maps.push(Some(PercussionMap {
+                                            unknown0,
+                                            unknown1,
+                                            unknown2,
+                                            unknown3,
+                                            unknown4,
+                                            unknown5,
+                                            unknown6,
+                                            unknown7,
+                                            unknown8,
+                                        }));
+                                    },
+                                    other => panic!("unknown magic at Perc offset: {:?}", other),
+                                }
+                            }
+
+                            list_items.push(BankListItem::Percussion(Percussion {
+                                percussion_maps,
+                            }));
                         },
                         other => panic!("unknown chunk {:?} pointed to from LIST section of .bnk file", other),
                     }
                 }
+                sections.push(BankSection::List { list_items });
                 bnk_file.seek(SeekFrom::Start(orig_pos))
                     .expect("failed to return to previous .bnk file location after jumping around due to LIST section");
             },
@@ -438,16 +475,5 @@ fn main() {
         }
     }
 
-    bnk_file.read_exact(&mut magic_buf)
-        .expect("failed to read INST magic from .bnk file");
-    if &magic_buf != b"INST" {
-        panic!(".bnk INST section has unexpected magic");
-    }
-
-    let mut nfi_buf = [0u8; 12];
-    bnk_file.read_exact(&mut nfi_buf)
-        .expect("failed to read INST header fields from .bnk file");
-
-    let keyboard_count = bnk_file.read_u32_be()
-        .expect("failed to read INST keyboard count from .bnk file");
+    println!("{:#?}", sections);
 }
