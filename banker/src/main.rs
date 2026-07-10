@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::{self, Read, Seek};
+use std::io::{self, Cursor, Read, Seek, SeekFrom};
 use std::path::PathBuf;
 
 use clap::Parser;
@@ -28,6 +28,12 @@ enum BankSection {
     Envelopes {
         envelopes: Vec<Envelope>,
     },
+    Oscillators {
+        oscillators: Vec<Oscillator>,
+    },
+    PercussionMaps {
+        percussion_maps: Vec<PercussionMap>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -40,12 +46,63 @@ struct Envelope {
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 struct Oscillator {
     // id: u32, // "Osci"
-    target: u32,
-    rate: OrderedFloat<f32>,
-    attack_envelope_offset: u32,
-    release_envelope_offset: u32,
-    scale: OrderedFloat<f32>,
-    vertex: OrderedFloat<f32>,
+    pub target: u32,
+    pub rate: OrderedFloat<f32>,
+    pub attack_envelope_offset: u32,
+    pub release_envelope_offset: u32,
+    pub scale: OrderedFloat<f32>,
+    pub vertex: OrderedFloat<f32>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+struct PercussionMap {
+    // id: u32, // "Pmap"
+    pub unknown0: u32,
+    pub unknown1: u32,
+    pub unknown2: u32,
+    pub unknown3: u32,
+    pub unknown4: u32,
+    pub unknown5: u32,
+    pub unknown6: u32,
+    pub unknown7: u32,
+    pub unknown8: u32,
+}
+
+#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+enum BankListItem {
+    #[default]
+    Invalid,
+    Instrument(Instrument),
+    Percussion(Percussion),
+}
+
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+struct Instrument {
+    // oscillator_count: u32,
+    pub oscillators: Vec<u32>,
+    // not_sure_what_count: u32,
+    pub not_sure_whats: Vec<u32>,
+    // key_region_count: u32,
+    pub key_regions: Vec<KeyRegion>,
+    pub volume: OrderedFloat<f32>,
+    pub pitch: OrderedFloat<f32>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+struct Percussion {
+
+}
+
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+struct KeyRegion {
+    pub high_key_raw: u32,
+    // additional_u32_count: u32,
+    pub additional_u32s: Vec<u32>,
+}
+impl KeyRegion {
+    pub fn high_key(&self) -> u32 {
+        self.high_key_raw >> 0x18
+    }
 }
 
 
@@ -113,7 +170,7 @@ fn main() {
         println!("padding is not all zeroes: {:?}", padding_buf);
     }
 
-    let mut section = Vec::new();
+    let mut sections = Vec::new();
     loop {
         let magic_opt = read_magic(&mut bnk_file)
             .expect("failed to read next section magic");
@@ -128,6 +185,7 @@ fn main() {
             bnk_file.read_exact(&mut section_data)
                 .expect("failed to read section data");
         }
+        let mut section_cursor = Cursor::new(&section_data);
 
         realign32(&mut bnk_file, section_length)
             .expect("failed to realign stream after section");
@@ -140,49 +198,51 @@ fn main() {
                     eprintln!("ENVT section has invalid length (must be divisible by 6); rounding down");
                 }
                 let mut envelopes = Vec::with_capacity(envelope_count);
-                for i in 0..envelope_count {
-                    let offset = 6 * i;
-                    let mode = u16::from_be_bytes(section_data[offset+0..offset+2].try_into().unwrap());
-                    let delay = u16::from_be_bytes(section_data[offset+2..offset+4].try_into().unwrap());
-                    let value = i16::from_be_bytes(section_data[offset+4..offset+6].try_into().unwrap());
+                for _ in 0..envelope_count {
+                    let mode = section_cursor.read_u16_be()
+                        .expect("failed to read envelope mode");
+                    let delay = section_cursor.read_u16_be()
+                        .expect("failed to read envelope delay");
+                    let value = section_cursor.read_i16_be()
+                        .expect("failed to read envelope value");
                     envelopes.push(Envelope {
                         mode,
                         delay,
                         value,
                     });
                 }
-                section.push(BankSection::Envelopes { envelopes });
+                sections.push(BankSection::Envelopes { envelopes });
             },
             b"OSCT" => {
                 // OSCillator Table
-                let osc_count: usize = bnk_file.read_u32_be()
+                let osc_count: usize = section_cursor.read_u32_be()
                     .expect("failed to read oscillator count from OSCT section of .bnk file")
                     .try_into().unwrap();
                 let mut oscillators = Vec::with_capacity(osc_count);
                 for _ in 0..osc_count {
-                    bnk_file.read_exact(&mut magic_buf)
+                    section_cursor.read_exact(&mut magic_buf)
                         .expect("failed to read Osci magic from .bnk file");
                     if &magic_buf != b"Osci" {
                         eprintln!("OSCT section has non-Osci chunk; giving up on the section");
                         break;
                     }
 
-                    let target = bnk_file.read_u32_be()
+                    let target = section_cursor.read_u32_be()
                         .expect("failed to obtain oscillator target");
                     let rate = OrderedFloat(
-                        bnk_file.read_f32_be()
+                        section_cursor.read_f32_be()
                             .expect("failed to obtain oscillator rate")
                     );
-                    let attack_envelope_offset = bnk_file.read_u32_be()
+                    let attack_envelope_offset = section_cursor.read_u32_be()
                         .expect("failed to obtain oscillator attack envelope offset");
-                    let release_envelope_offset = bnk_file.read_u32_be()
+                    let release_envelope_offset = section_cursor.read_u32_be()
                         .expect("failed to obtain oscillator release envelope offset");
                     let scale = OrderedFloat(
-                        bnk_file.read_f32_be()
+                        section_cursor.read_f32_be()
                             .expect("failed to obtain oscillator scale")
                     );
                     let vertex = OrderedFloat(
-                        bnk_file.read_f32_be()
+                        section_cursor.read_f32_be()
                             .expect("failed to obtain oscillator vertex")
                     );
                     oscillators.push(Oscillator {
@@ -194,30 +254,171 @@ fn main() {
                         vertex,
                     });
                 }
+                sections.push(BankSection::Oscillators { oscillators });
             },
             b"RAND" => {
                 // RANDom effect
-                todo!("decode RAND");
+                let rand_count: usize = section_cursor.read_u32_be()
+                    .expect("failed to read random-effect count from RAND section of .bnk file")
+                    .try_into().unwrap();
+                //let mut random_effects = Vec::with_capacity(rand_count);
+                for _ in 0..rand_count {
+                    panic!("don't know how to decode entries in the RAND section");
+                }
             },
             b"SENS" => {
                 // SENSor effect
-                todo!("decode SENS");
+                let sens_count: usize = section_cursor.read_u32_be()
+                    .expect("failed to read random-effect count from SENS section of .bnk file")
+                    .try_into().unwrap();
+                //let mut sensor_effects = Vec::with_capacity(rand_count);
+                for _ in 0..sens_count {
+                    panic!("don't know how to decode entries in the SENS section");
+                }
             },
             b"INST" => {
                 // INSTruments
-                todo!("decode INST");
+                // don't do anything yet; these are referenced from the LIST block
             },
             b"PMAP" => {
                 // Percussion MAPs
-                todo!("decode PMAP");
+                let pmap_count: usize = section_cursor.read_u32_be()
+                    .expect("failed to read percussion-map count from PMAP section of .bnk file")
+                    .try_into().unwrap();
+                let mut percussion_maps = Vec::new();
+                for _ in 0..pmap_count {
+                    section_cursor.read_exact(&mut magic_buf)
+                        .expect("failed to read Pmap magic from .bnk file");
+                    if &magic_buf != b"Pmap" {
+                        eprintln!("PMAP section has non-Pmap chunk; giving up on the section");
+                        break;
+                    }
+
+                    let unknown0: u32 = section_cursor.read_u32_be()
+                        .expect("failed to obtain percussion map unknown value 0");
+                    let unknown1: u32 = section_cursor.read_u32_be()
+                        .expect("failed to obtain percussion map unknown value 1");
+                    let unknown2: u32 = section_cursor.read_u32_be()
+                        .expect("failed to obtain percussion map unknown value 2");
+                    let unknown3: u32 = section_cursor.read_u32_be()
+                        .expect("failed to obtain percussion map unknown value 3");
+                    let unknown4: u32 = section_cursor.read_u32_be()
+                        .expect("failed to obtain percussion map unknown value 4");
+                    let unknown5: u32 = section_cursor.read_u32_be()
+                        .expect("failed to obtain percussion map unknown value 5");
+                    let unknown6: u32 = section_cursor.read_u32_be()
+                        .expect("failed to obtain percussion map unknown value 6");
+                    let unknown7: u32 = section_cursor.read_u32_be()
+                        .expect("failed to obtain percussion map unknown value 7");
+                    let unknown8: u32 = section_cursor.read_u32_be()
+                        .expect("failed to obtain percussion map unknown value 8");
+                    percussion_maps.push(PercussionMap {
+                        unknown0,
+                        unknown1,
+                        unknown2,
+                        unknown3,
+                        unknown4,
+                        unknown5,
+                        unknown6,
+                        unknown7,
+                        unknown8,
+                    });
+                }
+                sections.push(BankSection::PercussionMaps { percussion_maps });
             },
             b"PERC" => {
                 // PERCussion
-                todo!("decode PERC");
+                // don't do anything yet; these are referenced from the LIST block
             },
             b"LIST" => {
                 // LIST
-                todo!("decode LIST");
+                let item_count: usize = section_cursor.read_u32_be()
+                    .expect("failed to read item count from LIST section of .bnk file")
+                    .try_into().unwrap();
+                let orig_pos = bnk_file.seek(io::SeekFrom::Current(0))
+                    .expect("failed to remember current location within .bnk file");
+                let mut list_items = Vec::with_capacity(item_count);
+
+                for _ in 0..item_count {
+                    let offset = section_cursor.read_u32_be()
+                        .expect("failed to read a list offset from LIST section of .bnk file");
+                    if offset == 0 {
+                        list_items.push(BankListItem::Invalid);
+                        continue;
+                    }
+                    bnk_file.seek(SeekFrom::Start(offset.into()))
+                        .expect("failed to seek to offset pointed to by an entry of LIST section of .bnk file");
+                    bnk_file.read_exact(&mut magic_buf)
+                        .expect("failed to read magic from chunk pointed to by LIST section of .bnk file");
+                    match magic_buf.as_slice() {
+                        b"Inst" => {
+                            let oscillator_count: usize = bnk_file.read_u32_be()
+                                .expect("failed to read oscillator count from Inst chunk")
+                                .try_into().unwrap();
+                            let mut oscillators = Vec::with_capacity(oscillator_count);
+                            for _ in 0..oscillator_count {
+                                let oscillator_index = bnk_file.read_u32_be()
+                                    .expect("failed to read oscillator index from Inst chunk");
+                                oscillators.push(oscillator_index);
+                            }
+
+                            let not_sure_what_count: usize = bnk_file.read_u32_be()
+                                .expect("failed to read not-sure-what count from Inst chunk")
+                                .try_into().unwrap();
+                            let mut not_sure_whats = Vec::with_capacity(not_sure_what_count);
+                            for _ in 0..not_sure_what_count {
+                                let not_sure_what = bnk_file.read_u32_be()
+                                    .expect("failed to read not-sure-what from Inst chunk");
+                                not_sure_whats.push(not_sure_what);
+                            }
+
+                            let key_region_count: usize = bnk_file.read_u32_be()
+                                .expect("failed to read key-region count from Inst chunk")
+                                .try_into().unwrap();
+                            let mut key_regions = Vec::with_capacity(key_region_count);
+                            for _ in 0..key_region_count {
+                                let high_key_raw = bnk_file.read_u32_be()
+                                    .expect("failed to read high-key value from Inst chunk");
+                                let additional_u32_count: usize = bnk_file.read_u32_be()
+                                    .expect("failed to read additional-u32-count from Inst chunk")
+                                    .try_into().unwrap();
+                                let mut additional_u32s = Vec::with_capacity(additional_u32_count);
+                                for _ in 0..additional_u32_count {
+                                    let additional_u32 = bnk_file.read_u32_be()
+                                        .expect("failed to read key region's additional u32 from Inst chunk");
+                                    additional_u32s.push(additional_u32);
+                                }
+                                key_regions.push(KeyRegion {
+                                    high_key_raw,
+                                    additional_u32s,
+                                });
+                            }
+
+                            let volume = OrderedFloat(
+                                bnk_file.read_f32_be()
+                                    .expect("failed to read volume from Inst chunk")
+                            );
+                            let pitch = OrderedFloat(
+                                bnk_file.read_f32_be()
+                                    .expect("failed to read pitch from Inst chunk")
+                            );
+
+                            list_items.push(BankListItem::Instrument(Instrument {
+                                oscillators,
+                                not_sure_whats,
+                                key_regions,
+                                volume,
+                                pitch,
+                            }));
+                        },
+                        b"Perc" => {
+
+                        },
+                        other => panic!("unknown chunk {:?} pointed to from LIST section of .bnk file", other),
+                    }
+                }
+                bnk_file.seek(SeekFrom::Start(orig_pos))
+                    .expect("failed to return to previous .bnk file location after jumping around due to LIST section");
             },
             &[0, 0, 0, 0] => {
                 // end of file marker
