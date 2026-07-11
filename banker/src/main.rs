@@ -3,7 +3,7 @@ use std::io::{self, Cursor, Read, Seek, SeekFrom};
 use std::path::PathBuf;
 
 use clap::Parser;
-use gcst_common::ReadExt;
+use gcst_common::{ByteStr, ReadExt};
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 
@@ -199,6 +199,11 @@ fn main() {
         let magic_opt = read_magic(&mut bnk_file)
             .expect("failed to read next section magic");
         let Some(magic) = magic_opt else { break };
+        if magic == [0, 0, 0, 0] {
+            // it's over, don't even bother reading the length
+            // (there might be none)
+            break;
+        }
 
         let section_length: usize = bnk_file.read_u32_be()
             .expect("failed to read section length")
@@ -469,20 +474,8 @@ fn main() {
                 bnk_file.seek(SeekFrom::Start(orig_pos))
                     .expect("failed to return to previous .bnk file location after jumping around due to LIST section");
             },
-            &[0, 0, 0, 0] => {
-                // end of file marker
-                break;
-            },
             other => {
-                eprint!("skipping unknown section \"");
-                for b in other {
-                    if *b >= b' ' && *b <= b'~' {
-                        eprint!("{}", char::from_u32((*b).into()).unwrap());
-                    } else {
-                        eprint!("\\x{:02X}", *b);
-                    }
-                }
-                eprintln!("\"\n");
+                eprintln!("skipping unknown section {}", ByteStr(other));
             },
         }
     }
