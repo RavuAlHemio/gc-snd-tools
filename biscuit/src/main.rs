@@ -108,6 +108,15 @@ fn output_sequence(bsc_file: &mut File, stop_at_register_table_load: bool) {
                 println!("oh no, my most powerful enemy");
                 break;
             },
+            Event::SwitchBankAndProgram { bank_and_program } => {
+                // also display the separate values if they are immediate
+                if let Some(bap) = bank_and_program.as_u32() {
+                    let bank = (bap >> 8) & 0xFF;
+                    let program = (bap >> 0) & 0xFF;
+                    print_depth_prefix(depth + 1);
+                    println!("bank={} program={}", bank, program);
+                }
+            },
             _ => {},
         }
     }
