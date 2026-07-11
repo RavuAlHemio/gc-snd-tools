@@ -80,8 +80,8 @@ enum BankListItem {
 struct Instrument {
     // oscillator_count: u32,
     pub oscillators: Vec<u32>,
-    // not_sure_what_count: u32,
-    pub not_sure_whats: Vec<u32>,
+    // random_effect_count: u32,
+    pub random_effects: Vec<u32>,
     // key_region_count: u32,
     pub key_regions: Vec<KeyRegion>,
     pub volume: OrderedFloat<f32>,
@@ -330,14 +330,14 @@ fn main() {
                                 oscillators.push(oscillator_index);
                             }
 
-                            let not_sure_what_count: usize = bnk_file.read_u32_be()
-                                .expect("failed to read not-sure-what count from Inst chunk")
+                            let random_effect_count: usize = bnk_file.read_u32_be()
+                                .expect("failed to read random-effect count from Inst chunk")
                                 .try_into().unwrap();
-                            let mut not_sure_whats = Vec::with_capacity(not_sure_what_count);
-                            for _ in 0..not_sure_what_count {
-                                let not_sure_what = bnk_file.read_u32_be()
-                                    .expect("failed to read not-sure-what from Inst chunk");
-                                not_sure_whats.push(not_sure_what);
+                            let mut random_effects = Vec::with_capacity(random_effect_count);
+                            for _ in 0..random_effect_count {
+                                let random_effect = bnk_file.read_u32_be()
+                                    .expect("failed to read random effect index from Inst chunk");
+                                random_effects.push(random_effect);
                             }
 
                             let key_region_count: usize = bnk_file.read_u32_be()
@@ -381,7 +381,7 @@ fn main() {
 
                             list_items.push(BankListItem::Instrument(Instrument {
                                 oscillators,
-                                not_sure_whats,
+                                random_effects,
                                 key_regions,
                                 volume,
                                 pitch,
