@@ -3,7 +3,7 @@ use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 
 use clap::Parser;
-use gcst_common::end_at_first_zero;
+use gcst_common::{ReadExt, end_at_first_zero};
 
 
 /// Reads a .wsys file and its assortment of .aw files, decoding each entry from AFC ADPCM to
@@ -56,6 +56,23 @@ const AFC_COEFFICIENTS: [(i64, i64); 16] = [
     (-0x0400,  0x0000),
     (-0x0800,  0x0000),
 ];
+
+#[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
+struct Wave {
+    pub first_byte: u8,
+    pub wave_format: u8,
+    pub base_key: u8,
+    pub padding: u8,
+    pub sample_rate: f32,
+    pub data_offset: u32,
+    pub data_length: u32,
+    pub loop_flags: u32,
+    pub loop_start_sample: u32,
+    pub loop_end_sample: u32,
+    pub sample_count: u32,
+    pub last: i16,
+    pub penultimate: i16,
+}
 
 /// Decodes a chunk of AFC ADPCM audio into linear PCM.
 fn afc_decode_chunk(
@@ -230,10 +247,8 @@ fn process_winf<R: Read + Seek>(wsys: &mut R, verbose: bool, winf_offset: u32, d
         panic!("unexpected value at .wsys file offset {}; expected b'WINF'", winf_offset);
     }
 
-    let mut aw_count_buf = [0u8; 4];
-    wsys.read_exact(&mut aw_count_buf)
+    let aw_count = wsys.read_u32_be()
         .expect("failed to read number of AW entries");
-    let aw_count = u32::from_be_bytes(aw_count_buf);
     if verbose {
         eprintln!("{} AW entries", aw_count);
     }
@@ -243,10 +258,8 @@ fn process_winf<R: Read + Seek>(wsys: &mut R, verbose: bool, winf_offset: u32, d
             .expect("failed to seek to AW entry");
 
         // each of these entries is itself an offset to data about the .aw
-        let mut aw_offset_buf = [0u8; 4];
-        wsys.read_exact(&mut aw_offset_buf)
+        let aw_name_offset = wsys.read_u32_be()
             .expect("failed to read .aw data offset from .wsys");
-        let aw_name_offset = u32::from_be_bytes(aw_offset_buf);
         let aw_table_offset = aw_name_offset + u32::try_from(AW_FILENAME_LENGTH).unwrap();
 
         wsys.seek(SeekFrom::Start(aw_name_offset.into()))
@@ -274,10 +287,8 @@ fn process_winf<R: Read + Seek>(wsys: &mut R, verbose: bool, winf_offset: u32, d
         };
 
         // after the filename is the number of waves
-        let mut wave_count_buf = [0u8; 4];
-        wsys.read_exact(&mut wave_count_buf)
+        let wave_count = wsys.read_u32_be()
             .expect("failed to read .aw wave count");
-        let wave_count = u32::from_be_bytes(wave_count_buf);
 
         if verbose {
             println!("aw={}", aw_filename_str);
@@ -285,26 +296,67 @@ fn process_winf<R: Read + Seek>(wsys: &mut R, verbose: bool, winf_offset: u32, d
         }
 
         for wave_i in 0..wave_count {
-            let mut wave_entry_offset_buf = [0u8; 4];
             wsys.seek(SeekFrom::Start(u64::from(aw_table_offset + 4 + wave_i*4)))
                 .expect("failed to seek to wave entry offset");
-            wsys.read_exact(&mut wave_entry_offset_buf)
+            let wave_entry_offset = wsys.read_u32_be()
                 .expect("failed to read wave entry offset");
-            let wave_entry_offset = u32::from_be_bytes(wave_entry_offset_buf);
             wsys.seek(SeekFrom::Start(wave_entry_offset.into()))
                 .expect("failed to seek to wave entry");
 
-            let mut wave_entry_buf = [0u8; 20];
-            wsys.read_exact(&mut wave_entry_buf)
-                .expect("failed to read wave entry");
-
-            // ?? ?? ?? ?? ?? rr rr ?? oo oo oo oo ss ss ss ss ?? ?? ?? ??
-            let sample_rate = u16::from_be_bytes(wave_entry_buf[5..7].try_into().unwrap()) >> 1;
-            let afc_offset = u32::from_be_bytes(wave_entry_buf[8..12].try_into().unwrap());
-            let afc_size = u32::from_be_bytes(wave_entry_buf[12..16].try_into().unwrap());
+            let first_byte = wsys.read_u8()
+                .expect("failed to read first byte of wave entry");
+            let wave_format = wsys.read_u8()
+                .expect("failed to read wave format from wave entry");
+            let base_key = wsys.read_u8()
+                .expect("failed to read base key from wave entry");
+            let padding = wsys.read_u8()
+                .expect("failed to read padding byte from wave entry");
+            let sample_rate = wsys.read_f32_be()
+                .expect("failed to read sample rate from wave entry");
+            let data_offset = wsys.read_u32_be()
+                .expect("failed to read data offset from wave entry");
+            let data_length = wsys.read_u32_be()
+                .expect("failed to read data length from wave entry");
+            let loop_flags = wsys.read_u32_be()
+                .expect("failed to read loop flags from wave entry");
+            let loop_start_sample = wsys.read_u32_be()
+                .expect("failed to read loop start sample from wave entry");
+            let loop_end_sample = wsys.read_u32_be()
+                .expect("failed to read loop end sample from wave entry");
+            let sample_count = wsys.read_u32_be()
+                .expect("failed to read sample count from wave entry");
+            let last = wsys.read_i16_be()
+                .expect("failed to read last value from wave entry");
+            let penultimate = wsys.read_i16_be()
+                .expect("failed to read penultimate value from wave entry");
+            let wave = Wave {
+                first_byte,
+                wave_format,
+                base_key,
+                padding,
+                sample_rate,
+                data_offset,
+                data_length,
+                loop_flags,
+                loop_start_sample,
+                loop_end_sample,
+                sample_count,
+                last,
+                penultimate,
+            };
             if verbose {
-                println!("index={:#010X}\toffset={:#X}\tsize={:#X}\tsrate={}", wave_i, afc_offset, afc_size, sample_rate);
+                println!("{:?}", wave);
             }
+            if sample_rate.fract().abs() > 0.0001 {
+                eprintln!("WARNING: fractional sample rate {} at index {} offset {}", sample_rate, wave_i, data_offset);
+            }
+            if sample_rate < (u16::MIN as f32) {
+                panic!("sample rate {} at index {} offset {} too small for u16", sample_rate, wave_i, data_offset);
+            }
+            if sample_rate > (u16::MAX as f32) {
+                panic!("sample rate {} at index {} offset {} too large for u16", sample_rate, wave_i, data_offset);
+            }
+            let sample_rate_u16 = sample_rate as u16;
 
             let wav_filename = if decimal_wave_index {
                 format!("{}_{:010}.wav", aw_filename_str, wave_i)
@@ -313,9 +365,9 @@ fn process_winf<R: Read + Seek>(wsys: &mut R, verbose: bool, winf_offset: u32, d
             };
             dump_afc(
                 &mut aw_file,
-                afc_offset,
-                afc_size,
-                sample_rate,
+                data_offset,
+                data_length,
+                sample_rate_u16,
                 &wav_filename,
                 debug_afc,
             );
