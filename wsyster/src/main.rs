@@ -30,6 +30,10 @@ struct Opts {
     /// Enables debug output when decoding AFC ADPCM data.
     #[arg(long)]
     pub debug_afc: bool,
+
+    /// When extracting wave files, use a decimal instead of a hexadecimal wave index.
+    #[arg(short, long)]
+    pub decimal_wave_index: bool,
 }
 
 const AW_FILENAME_LENGTH: usize = 112;
@@ -214,7 +218,7 @@ fn dump_afc<R: Read + Seek>(
         .expect("failed to flush .wav file");
 }
 
-fn process_winf<R: Read + Seek>(wsys: &mut R, verbose: bool, winf_offset: u32, debug_afc: bool) {
+fn process_winf<R: Read + Seek>(wsys: &mut R, verbose: bool, winf_offset: u32, debug_afc: bool, decimal_wave_index: bool) {
     // seek to the WINF offset
     wsys.seek(SeekFrom::Start(winf_offset.into()))
         .expect("failed to seek to WINF offset within .wsys file");
@@ -302,7 +306,11 @@ fn process_winf<R: Read + Seek>(wsys: &mut R, verbose: bool, winf_offset: u32, d
                 println!("index={:#010X}\toffset={:#X}\tsize={:#X}\tsrate={}", wave_i, afc_offset, afc_size, sample_rate);
             }
 
-            let wav_filename = format!("{}_{:08X}.wav", aw_filename_str, wave_i);
+            let wav_filename = if decimal_wave_index {
+                format!("{}_{:010}.wav", aw_filename_str, wave_i)
+            } else {
+                format!("{}_{:08X}.wav", aw_filename_str, wave_i)
+            };
             dump_afc(
                 &mut aw_file,
                 afc_offset,
@@ -421,7 +429,7 @@ fn process_wbct<R: Read + Seek>(wsys: &mut R, verbose: bool, wbct_offset: u32) {
     }
 }
 
-fn process_wsys<R: Read + Seek>(wsys: &mut R, verbose: bool, skip_winf: bool, skip_wbct: bool, debug_afc: bool) {
+fn process_wsys<R: Read + Seek>(wsys: &mut R, verbose: bool, skip_winf: bool, skip_wbct: bool, debug_afc: bool, decimal_wave_index: bool) {
     let mut wsys_magic_buf = [0u8; 4];
     wsys.read_exact(&mut wsys_magic_buf)
         .expect("failed to read magic from .wsys file");
@@ -443,7 +451,7 @@ fn process_wsys<R: Read + Seek>(wsys: &mut R, verbose: bool, skip_winf: bool, sk
     let wbct_offset = u32::from_be_bytes(offset_buf);
 
     if !skip_winf {
-        process_winf(wsys, verbose, winf_offset, debug_afc);
+        process_winf(wsys, verbose, winf_offset, debug_afc, decimal_wave_index);
     }
     if !skip_wbct {
         process_wbct(wsys, verbose, wbct_offset);
@@ -455,5 +463,5 @@ fn main() {
 
     let mut wsys_file = File::open(&opts.wsys_path)
         .expect("failed to open .wsys file");
-    process_wsys(&mut wsys_file, opts.verbose, opts.skip_winf, opts.skip_wbct, opts.debug_afc);
+    process_wsys(&mut wsys_file, opts.verbose, opts.skip_winf, opts.skip_wbct, opts.debug_afc, opts.decimal_wave_index);
 }
