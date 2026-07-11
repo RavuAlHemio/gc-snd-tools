@@ -33,6 +33,14 @@ fn traverse<B: Read + Seek, N: Read + Seek>(
     leaf_addr: u32,
 ) {
     if leaf_addr != 0 {
+        if bst_offset == 0 {
+            println!(
+                "[{:08X}]=>{:08X}",
+                leaf_addr, bst_offset,
+            );
+            return;
+        }
+
         bstn_reader.seek(SeekFrom::Start(bstn_offset.into()))
             .expect("failed to seek in .bstn file to file name");
         let mut filename_buf = [0u8; FILENAME_SIZE];
