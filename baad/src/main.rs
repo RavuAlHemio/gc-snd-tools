@@ -143,10 +143,10 @@ fn extract_type_offset<R: Read + Seek>(
         );
     }
 
-    let length = match reader.read_u32_be() {
+    let data_length = match reader.read_u32_be() {
         Ok(l) => l,
         Err(e) => panic!(
-            "failed to read length of {} chunk: {}",
+            "failed to read data length of {} chunk: {}",
             chunk_type, e,
         ),
     };
@@ -171,6 +171,9 @@ fn extract_type_offset<R: Read + Seek>(
             );
         },
     };
+
+    // don't forget the magic and data length fields!
+    let length = 4 + 4 + data_length;
 
     extract_range(
         reader, &mut writer,
