@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
@@ -19,14 +20,6 @@ struct Opts {
     #[arg(short, long)]
     pub verbose: bool,
 
-    /// Skips WINF processing, which consists of wave extraction.
-    #[arg(long)]
-    pub skip_winf: bool,
-
-    /// Skips WBCT processing, which lists scenes, wave group IDs and wave IDs.
-    #[arg(long)]
-    pub skip_wbct: bool,
-
     /// Enables debug output when decoding AFC ADPCM data.
     #[arg(long)]
     pub debug_afc: bool,
@@ -34,6 +27,10 @@ struct Opts {
     /// When extracting wave files, use a decimal instead of a hexadecimal wave index.
     #[arg(short, long)]
     pub decimal_wave_index: bool,
+
+    /// Whether to renumber wave files according to the values in the scene table.
+    #[arg(short, long)]
+    pub renumber_by_scene: bool,
 }
 
 const AW_FILENAME_LENGTH: usize = 112;
@@ -235,7 +232,14 @@ fn dump_afc<R: Read + Seek>(
         .expect("failed to flush .wav file");
 }
 
-fn process_winf<R: Read + Seek>(wsys: &mut R, verbose: bool, winf_offset: u32, debug_afc: bool, decimal_wave_index: bool) {
+fn process_winf<R: Read + Seek>(
+    wsys: &mut R,
+    verbose: bool,
+    winf_offset: u32,
+    debug_afc: bool,
+    decimal_wave_index: bool,
+    archive_to_global_map: Option<&BTreeMap<(u32, u32), (u16, u16)>>,
+) {
     // seek to the WINF offset
     wsys.seek(SeekFrom::Start(winf_offset.into()))
         .expect("failed to seek to WINF offset within .wsys file");
@@ -273,6 +277,10 @@ fn process_winf<R: Read + Seek>(wsys: &mut R, verbose: bool, winf_offset: u32, d
         let aw_filename_str = std::str::from_utf8(aw_filename_slice)
             .expect("AW filename is invalid UTF-8");
 
+        // after the filename is the number of waves
+        let wave_count = wsys.read_u32_be()
+            .expect("failed to read .aw wave count");
+
         let mut aw_file = match File::open(aw_filename_str) {
             Ok(af) => af,
             Err(e) => {
@@ -285,10 +293,6 @@ fn process_winf<R: Read + Seek>(wsys: &mut R, verbose: bool, winf_offset: u32, d
                 }
             },
         };
-
-        // after the filename is the number of waves
-        let wave_count = wsys.read_u32_be()
-            .expect("failed to read .aw wave count");
 
         if verbose {
             println!("aw={}", aw_filename_str);
@@ -358,11 +362,22 @@ fn process_winf<R: Read + Seek>(wsys: &mut R, verbose: bool, winf_offset: u32, d
             }
             let sample_rate_u16 = sample_rate as u16;
 
-            let wav_filename = if decimal_wave_index {
-                format!("{}_{:010}.wav", aw_filename_str, wave_i)
+            let wav_filename = if let Some(atgm) = archive_to_global_map {
+                let (wave_group, wave) = atgm.get(&(aw_i, wave_i))
+                    .expect("failed to find entry");
+                if decimal_wave_index {
+                    format!("{:05}_{:05}.wav", wave_group, wave)
+                } else {
+                    format!("{:04X}_{:04X}.wav", wave_group, wave)
+                }
             } else {
-                format!("{}_{:08X}.wav", aw_filename_str, wave_i)
+                if decimal_wave_index {
+                    format!("{}_{:010}.wav", aw_filename_str, wave_i)
+                } else {
+                    format!("{}_{:08X}.wav", aw_filename_str, wave_i)
+                }
             };
+
             dump_afc(
                 &mut aw_file,
                 data_offset,
@@ -375,7 +390,11 @@ fn process_winf<R: Read + Seek>(wsys: &mut R, verbose: bool, winf_offset: u32, d
     }
 }
 
-fn process_wbct<R: Read + Seek>(wsys: &mut R, verbose: bool, wbct_offset: u32) {
+fn process_wbct<R: Read + Seek>(
+    wsys: &mut R,
+    verbose: bool,
+    wbct_offset: u32,
+) -> BTreeMap<(u32, u32), (u16, u16)> {
     // seek to the WBCT offset
     wsys.seek(SeekFrom::Start(wbct_offset.into()))
         .expect("failed to seek to WBCT offset within .wsys file");
@@ -400,6 +419,7 @@ fn process_wbct<R: Read + Seek>(wsys: &mut R, verbose: bool, wbct_offset: u32) {
         eprintln!("{} scenes", scene_count);
     }
 
+    let mut mapping = BTreeMap::new();
     for scene_i in 0..scene_count {
         // seek to the corresponding offset entry
         wsys.seek(SeekFrom::Start(u64::from(wbct_offset + 12 + scene_i*4)))
@@ -473,15 +493,24 @@ fn process_wbct<R: Read + Seek>(wsys: &mut R, verbose: bool, wbct_offset: u32) {
             let wave_group_id = u16::from_be_bytes(wave_id_buf[0..2].try_into().unwrap());
             let wave_id = u16::from_be_bytes(wave_id_buf[2..4].try_into().unwrap());
 
-            println!(
-                "scene {} entry {} ({:08X}): wavegroup {} wave {}",
-                scene_i, wave_i, wave_i, wave_group_id, wave_id,
+            let existing = mapping.insert(
+                (scene_i, wave_i),
+                (wave_group_id, wave_id),
             );
+            // scene_i and wave_i *should* be unique
+            assert!(existing.is_none());
         }
     }
+    mapping
 }
 
-fn process_wsys<R: Read + Seek>(wsys: &mut R, verbose: bool, skip_winf: bool, skip_wbct: bool, debug_afc: bool, decimal_wave_index: bool) {
+fn process_wsys<R: Read + Seek>(
+    wsys: &mut R,
+    verbose: bool,
+    debug_afc: bool,
+    decimal_wave_index: bool,
+    renumber_by_scene: bool,
+) {
     let mut wsys_magic_buf = [0u8; 4];
     wsys.read_exact(&mut wsys_magic_buf)
         .expect("failed to read magic from .wsys file");
@@ -502,12 +531,22 @@ fn process_wsys<R: Read + Seek>(wsys: &mut R, verbose: bool, skip_winf: bool, sk
         .expect("failed to read WBCT offset from .wsys file");
     let wbct_offset = u32::from_be_bytes(offset_buf);
 
-    if !skip_winf {
-        process_winf(wsys, verbose, winf_offset, debug_afc, decimal_wave_index);
-    }
-    if !skip_wbct {
-        process_wbct(wsys, verbose, wbct_offset);
-    }
+    let archive_to_global_map_holder;
+    let archive_to_global_map = if renumber_by_scene {
+        archive_to_global_map_holder = process_wbct(wsys, verbose, wbct_offset);
+        Some(&archive_to_global_map_holder)
+    } else {
+        None
+    };
+
+    process_winf(
+        wsys,
+        verbose,
+        winf_offset,
+        debug_afc,
+        decimal_wave_index,
+        archive_to_global_map,
+    );
 }
 
 fn main() {
@@ -515,5 +554,11 @@ fn main() {
 
     let mut wsys_file = File::open(&opts.wsys_path)
         .expect("failed to open .wsys file");
-    process_wsys(&mut wsys_file, opts.verbose, opts.skip_winf, opts.skip_wbct, opts.debug_afc, opts.decimal_wave_index);
+    process_wsys(
+        &mut wsys_file,
+        opts.verbose,
+        opts.debug_afc,
+        opts.decimal_wave_index,
+        opts.renumber_by_scene,
+    );
 }
