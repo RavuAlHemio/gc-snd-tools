@@ -13,6 +13,10 @@ use serde::{Deserialize, Serialize};
 struct Opts {
     /// Path to the .bnk file.
     pub bnk_path: PathBuf,
+
+    /// Enables more detailed progress logging.
+    #[arg(short, long)]
+    pub verbose: bool,
 }
 
 
@@ -203,6 +207,9 @@ fn main() {
             // it's over, don't even bother reading the length
             // (there might be none)
             break;
+        }
+        if opts.verbose {
+            eprintln!("section {}", ByteStr(&magic));
         }
 
         let section_length: usize = bnk_file.read_u32_be()
