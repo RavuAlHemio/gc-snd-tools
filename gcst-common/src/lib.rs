@@ -1,3 +1,4 @@
+use std::fmt;
 use std::io;
 
 
@@ -85,5 +86,39 @@ pub fn end_at_first_zero(buf: &[u8]) -> &[u8] {
     match zero_pos {
         Some(pos) => &buf[0..pos],
         None => buf,
+    }
+}
+
+
+/// A wrapper around a byte slice with a [`std::fmt::Display`] implementation outputting strings
+/// reminiscent of byte strings in Rust.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct ByteStr<'a>(pub &'a [u8]);
+impl<'a> fmt::Display for ByteStr<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "b\"")?;
+        for b in self.0 {
+            match *b {
+                b'"' => {
+                    write!(f, "\\\"")?;
+                },
+                b' '..=b'~' => {
+                    write!(f, "{}", char::from_u32((*b).into()).unwrap())?;
+                },
+                b'\n' => {
+                    write!(f, "\\n")?;
+                },
+                b'\r' => {
+                    write!(f, "\\r")?;
+                },
+                b'\t' => {
+                    write!(f, "\\t")?;
+                },
+                other => {
+                    write!(f, "\\x{:02X}", other)?;
+                },
+            }
+        }
+        write!(f, "\"")
     }
 }
