@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use clap::Parser;
 use gcst_common::ReadExt;
 use ordered_float::OrderedFloat;
+use serde::{Deserialize, Serialize};
 
 
 /// Dumps the contents of a .bnk file.
@@ -15,7 +16,7 @@ struct Opts {
 }
 
 
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 struct InstrumentBank {
     pub bank_id: u32,
     pub version: u32,
@@ -23,7 +24,8 @@ struct InstrumentBank {
     pub sections: Vec<BankSection>,
 }
 
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(tag = "type")]
 enum BankSection {
     Envelopes {
         envelopes: Vec<Envelope>,
@@ -36,14 +38,14 @@ enum BankSection {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 struct Envelope {
     pub mode: u16,
     pub delay: u16,
     pub value: i16,
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 struct Oscillator {
     // id: u32, // "Osci"
     pub target: u32,
@@ -54,21 +56,21 @@ struct Oscillator {
     pub vertex: OrderedFloat<f32>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 struct PercussionMap {
     // id: u32, // "Pmap"
-    pub unknown0: u32,
-    pub unknown1: u32,
-    pub unknown2: u32,
-    pub unknown3: u32,
-    pub unknown4: u32,
-    pub unknown5: u32,
-    pub unknown6: u32,
-    pub unknown7: u32,
-    pub unknown8: u32,
+    pub volume: OrderedFloat<f32>,
+    pub pitch: OrderedFloat<f32>,
+    pub pan: u8,
+    pub reserved0: u8,
+    pub release: u16,
+    pub oscillator_count: u32,
+    // velocity_region_count: u32,
+    pub velocity_regions: Vec<VelocityRegion>,
 }
 
-#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Default, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(tag = "type")]
 enum BankListItem {
     #[default]
     Invalid,
@@ -76,7 +78,7 @@ enum BankListItem {
     Percussion(Percussion),
 }
 
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 struct Instrument {
     // oscillator_count: u32,
     pub oscillators: Vec<u32>,
@@ -88,12 +90,12 @@ struct Instrument {
     pub pitch: OrderedFloat<f32>,
 }
 
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 struct Percussion {
     pub percussion_maps: Vec<Option<PercussionMap>>,
 }
 
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 struct KeyRegion {
     pub high_key_raw: u32,
     // velocity_region_count: u32,
@@ -105,7 +107,7 @@ impl KeyRegion {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 struct VelocityRegion {
     pub velocity: u8,
     pub padding: [u8; 3],
@@ -113,6 +115,20 @@ struct VelocityRegion {
     pub wave_id: u16,
     pub volume: OrderedFloat<f32>,
     pub pitch: OrderedFloat<f32>,
+}
+impl VelocityRegion {
+    pub fn read<R: Read>(reader: &mut R) -> Result<Self, io::Error> {
+        let mut buf = [0u8; 16];
+        reader.read_exact(&mut buf)?;
+        Ok(VelocityRegion {
+            velocity: buf[0],
+            padding: buf[1..4].try_into().unwrap(),
+            wave_system_id: u16::from_be_bytes(buf[4..6].try_into().unwrap()),
+            wave_id: u16::from_be_bytes(buf[6..8].try_into().unwrap()),
+            volume: OrderedFloat(f32::from_be_bytes(buf[8..12].try_into().unwrap())),
+            pitch: OrderedFloat(f32::from_be_bytes(buf[12..16].try_into().unwrap())),
+        })
+    }
 }
 
 
@@ -168,16 +184,14 @@ fn main() {
         .expect("failed to read length from .bnk file");
     let bank_id = bnk_file.read_u32_be()
         .expect("failed to read bank ID from .bnk file");
-    println!("bank ID: {}", bank_id);
     let version = bnk_file.read_u32_be()
         .expect("failed to read version from .bnk file");
-    println!("version: {}", version);
 
     let mut padding_buf = [0u8; 16];
     bnk_file.read_exact(&mut padding_buf)
         .expect("failed to read padding from .bnk file");
     if !padding_buf.iter().all(|b| *b == 0x00) {
-        println!("padding is not all zeroes: {:?}", padding_buf);
+        eprintln!("padding is not all zeroes: {:?}", padding_buf);
     }
 
     let mut sections = Vec::new();
@@ -352,17 +366,9 @@ fn main() {
                                     .try_into().unwrap();
                                 let mut velocity_regions = Vec::with_capacity(velocity_region_count);
                                 for _ in 0..velocity_region_count {
-                                    let mut velocity_region_buf = [0u8; 16];
-                                    bnk_file.read_exact(&mut velocity_region_buf)
+                                    let velocity_region = VelocityRegion::read(&mut bnk_file)
                                         .expect("failed to read velocity region from Inst chunk");
-                                    velocity_regions.push(VelocityRegion {
-                                        velocity: velocity_region_buf[0],
-                                        padding: velocity_region_buf[1..4].try_into().unwrap(),
-                                        wave_system_id: u16::from_be_bytes(velocity_region_buf[4..6].try_into().unwrap()),
-                                        wave_id: u16::from_be_bytes(velocity_region_buf[6..8].try_into().unwrap()),
-                                        volume: OrderedFloat(f32::from_be_bytes(velocity_region_buf[8..12].try_into().unwrap())),
-                                        pitch: OrderedFloat(f32::from_be_bytes(velocity_region_buf[12..16].try_into().unwrap())),
-                                    });
+                                    velocity_regions.push(velocity_region);
                                 }
                                 key_regions.push(KeyRegion {
                                     high_key_raw,
@@ -412,34 +418,40 @@ fn main() {
                                     .expect("failed to read magic of value pointed to by offset in Perc chunk");
                                 match magic_buf.as_slice() {
                                     b"Pmap" => {
-                                        let unknown0: u32 = bnk_file.read_u32_be()
-                                            .expect("failed to obtain percussion map unknown value 0");
-                                        let unknown1: u32 = bnk_file.read_u32_be()
-                                            .expect("failed to obtain percussion map unknown value 1");
-                                        let unknown2: u32 = bnk_file.read_u32_be()
-                                            .expect("failed to obtain percussion map unknown value 2");
-                                        let unknown3: u32 = bnk_file.read_u32_be()
-                                            .expect("failed to obtain percussion map unknown value 3");
-                                        let unknown4: u32 = bnk_file.read_u32_be()
-                                            .expect("failed to obtain percussion map unknown value 4");
-                                        let unknown5: u32 = bnk_file.read_u32_be()
-                                            .expect("failed to obtain percussion map unknown value 5");
-                                        let unknown6: u32 = bnk_file.read_u32_be()
-                                            .expect("failed to obtain percussion map unknown value 6");
-                                        let unknown7: u32 = bnk_file.read_u32_be()
-                                            .expect("failed to obtain percussion map unknown value 7");
-                                        let unknown8: u32 = bnk_file.read_u32_be()
-                                            .expect("failed to obtain percussion map unknown value 8");
+                                        let volume = OrderedFloat(
+                                            bnk_file.read_f32_be()
+                                                .expect("failed to read volume from Pmap chunk")
+                                        );
+                                        let pitch = OrderedFloat(
+                                            bnk_file.read_f32_be()
+                                                .expect("failed to read volume from Pmap chunk")
+                                        );
+                                        let pan = bnk_file.read_u8()
+                                            .expect("failed to read pan value from Pmap chunk");
+                                        let reserved0 = bnk_file.read_u8()
+                                            .expect("failed to read reserved value from Pmap chunk");
+                                        let release = bnk_file.read_u16_be()
+                                            .expect("failed to read release from Pmap chunk");
+                                        let oscillator_count = bnk_file.read_u32_be()
+                                            .expect("failed to read oscillator count from Pmap chunk");
+                                        let velocity_region_count: usize = bnk_file.read_u32_be()
+                                            .expect("failed to read velocty region count from Pmap chunk")
+                                            .try_into().unwrap();
+                                        let mut velocity_regions = Vec::with_capacity(velocity_region_count);
+                                        for _ in 0..velocity_region_count {
+                                            let velocity_region = VelocityRegion::read(&mut bnk_file)
+                                                .expect("failed to read velocity region from Inst chunk");
+                                            velocity_regions.push(velocity_region);
+                                        }
+
                                         percussion_maps.push(Some(PercussionMap {
-                                            unknown0,
-                                            unknown1,
-                                            unknown2,
-                                            unknown3,
-                                            unknown4,
-                                            unknown5,
-                                            unknown6,
-                                            unknown7,
-                                            unknown8,
+                                            volume,
+                                            pitch,
+                                            pan,
+                                            reserved0,
+                                            release,
+                                            oscillator_count,
+                                            velocity_regions,
                                         }));
                                     },
                                     other => panic!("unknown magic at Perc offset: {:?}", other),
@@ -462,18 +474,26 @@ fn main() {
                 break;
             },
             other => {
-                print!("skipping unknown section \"");
+                eprint!("skipping unknown section \"");
                 for b in other {
                     if *b >= b' ' && *b <= b'~' {
-                        print!("{}", char::from_u32((*b).into()).unwrap());
+                        eprint!("{}", char::from_u32((*b).into()).unwrap());
                     } else {
-                        print!("\\x{:02X}", *b);
+                        eprint!("\\x{:02X}", *b);
                     }
                 }
-                println!("\"\n");
+                eprintln!("\"\n");
             },
         }
     }
 
-    println!("{:#?}", sections);
+    let instrument_bank = InstrumentBank {
+        bank_id,
+        version,
+        padding: padding_buf,
+        sections,
+    };
+    let ibnk_json_string = serde_json::to_string_pretty(&instrument_bank)
+        .expect("failed to serialize instrument bank to JSON");
+    println!("{}", ibnk_json_string);
 }

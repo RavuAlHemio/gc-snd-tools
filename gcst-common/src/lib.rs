@@ -3,6 +3,14 @@ use std::io;
 
 /// Extensions for reading binary values from byte streams.
 pub trait ReadExt {
+    /// Reads an unsigned 8-bit integer from the stream.
+    ///
+    /// Differences in byte order do not affect single-byte values.
+    ///
+    /// If reading fails, the function returns the error it encountered. Once reading succeeds, this
+    /// function is guaranteed to succeed; decoding the integer itself cannot fail.
+    fn read_u8(&mut self) -> Result<u8, io::Error>;
+
     /// Reads a big-endian unsigned 16-bit integer from the stream.
     ///
     /// Big endian is the byte order where the most significant byte appears first.
@@ -36,6 +44,12 @@ pub trait ReadExt {
     fn read_f32_be(&mut self) -> Result<f32, io::Error>;
 }
 impl<R: io::Read> ReadExt for R {
+    fn read_u8(&mut self) -> Result<u8, io::Error> {
+        let mut ret = 0u8;
+        self.read_exact(std::slice::from_mut(&mut ret))?;
+        Ok(ret)
+    }
+
     fn read_u16_be(&mut self) -> Result<u16, io::Error> {
         let mut buf = [0u8; 2];
         self.read_exact(&mut buf)?;
