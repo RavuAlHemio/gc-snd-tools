@@ -4,7 +4,7 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::PathBuf;
 
 use clap::Parser;
-use gcst_bms::{self, Event};
+use gcst_bms::{self, ConditionFlag, ControlParameter, Event, MidiPitch};
 
 
 /// Dumps the contents of a .bsc file.
@@ -43,7 +43,7 @@ fn output_sequence(bsc_file: &mut File, stop_at_register_table_load: bool) {
 
         match &ev {
             Event::Call { target } => {
-                if let Some(target_u32) = target.as_u32() {
+                if let Some(target_u32) = target.as_immediate() {
                     let return_here = bsc_file.seek(SeekFrom::Current(0))
                         .expect("failed to obtain current position");
                     call_stack.push(return_here);
@@ -55,7 +55,7 @@ fn output_sequence(bsc_file: &mut File, stop_at_register_table_load: bool) {
                 }
             },
             Event::Jump { target } => {
-                if let Some(target_u32) = target.as_u32() {
+                if let Some(target_u32) = target.as_immediate() {
                     if jumped_here_before.insert(target_u32) {
                         bsc_file.seek(SeekFrom::Start(target_u32.into()))
                             .expect("failed to seek to jump destination");
@@ -92,7 +92,7 @@ fn output_sequence(bsc_file: &mut File, stop_at_register_table_load: bool) {
             },
             Event::OpenTrack { track_pointer, .. } => {
                 // act like this is a Call
-                if let Some(target_u32) = track_pointer.as_u32() {
+                if let Some(target_u32) = track_pointer.as_immediate() {
                     let return_here = bsc_file.seek(SeekFrom::Current(0))
                         .expect("failed to obtain current position");
                     call_stack.push(return_here);
@@ -110,11 +110,40 @@ fn output_sequence(bsc_file: &mut File, stop_at_register_table_load: bool) {
             },
             Event::SwitchBankAndProgram { bank_and_program } => {
                 // also display the separate values if they are immediate
-                if let Some(bap) = bank_and_program.as_u32() {
+                if let Some(bap) = bank_and_program.as_immediate() {
                     let bank = (bap >> 8) & 0xFF;
                     let program = (bap >> 0) & 0xFF;
                     print_depth_prefix(depth + 1);
                     println!("bank={} program={}", bank, program);
+                }
+            },
+            Event::DirectNoteOn { pitch, .. } => {
+                // also output the pitch as a note
+                print_depth_prefix(depth + 1);
+                println!("note={}", MidiPitch::from(pitch));
+            },
+            Event::IndirectNoteOn { pitch, .. } => {
+                if let Some(p) = pitch.as_immediate() {
+                    // also output the pitch as a note
+                    print_depth_prefix(depth + 1);
+                    println!("note={}", MidiPitch::from(p));
+                }
+            },
+            Event::ConditionalCall { condition, .. }
+            |Event::ConditionalJump { condition, .. }
+            |Event::ConditionalReturn { condition, .. } => {
+                if let Some(cond) = condition.as_immediate() {
+                    print_depth_prefix(depth + 1);
+                    println!("cond={:?}", ConditionFlag::from(cond));
+                }
+            },
+            Event::Control16 { parameter, .. }
+            |Event::Control16Gradual { parameter, .. }
+            |Event::Control8 { parameter, .. }
+            |Event::Control8Gradual { parameter, .. } => {
+                if let Some(p) = parameter.as_immediate() {
+                    print_depth_prefix(depth + 1);
+                    println!("param={:?}", ControlParameter::from(p));
                 }
             },
             _ => {},

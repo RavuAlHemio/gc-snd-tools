@@ -1,9 +1,16 @@
 mod max_array;
 
 
-use std::{io::{self, Read, Seek}, sync::LazyLock};
+use std::fmt;
+use std::io::{self, Read, Seek};
+use std::sync::LazyLock;
 
 use crate::max_array::MaxArray;
+
+
+/// A common value type that is large enough to hold any type of immediate value in JAudio2 sequence
+/// code.
+pub type UniversalImmediateValue = u32;
 
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -31,7 +38,7 @@ impl Value {
         }
     }
 
-    pub fn as_u32(&self) -> Option<u32> {
+    pub fn as_immediate(&self) -> Option<UniversalImmediateValue> {
         match self {
             Self::Immediate8(val) => Some((*val).into()),
             Self::Immediate16(val) => Some((*val).into()),
@@ -576,10 +583,10 @@ pub enum RegisterOperation {
     Rand,
     ShiftLeft,
     ShiftRight,
-    Other(u8),
+    Other(UniversalImmediateValue),
 }
-impl From<u8> for RegisterOperation {
-    fn from(value: u8) -> Self {
+impl From<UniversalImmediateValue> for RegisterOperation {
+    fn from(value: UniversalImmediateValue) -> Self {
         match value {
             0 => Self::NoOp,
             1 => Self::Add,
@@ -603,10 +610,10 @@ pub enum ControlParameter {
     Pitch,
     Reverb,
     Pan,
-    Other(u8),
+    Other(UniversalImmediateValue),
 }
-impl From<u8> for ControlParameter {
-    fn from(value: u8) -> Self {
+impl From<UniversalImmediateValue> for ControlParameter {
+    fn from(value: UniversalImmediateValue) -> Self {
         match value {
             0 => Self::Volume,
             1 => Self::Pitch,
@@ -614,6 +621,79 @@ impl From<u8> for ControlParameter {
             3 => Self::Pan,
             other => Self::Other(other),
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum ConditionFlag {
+    AlwaysTrue,
+    IsZero,
+    IsNotZero,
+    IsOne,
+    IsNegative,
+    IsPositive,
+    Other(UniversalImmediateValue),
+}
+impl From<UniversalImmediateValue> for ConditionFlag {
+    fn from(value: UniversalImmediateValue) -> Self {
+        match value {
+            0 => Self::AlwaysTrue,
+            1 => Self::IsZero,
+            2 => Self::IsNotZero,
+            3 => Self::IsOne,
+            4 => Self::IsNegative,
+            5 => Self::IsPositive,
+            other => Self::Other(other),
+        }
+    }
+}
+
+/// A helper type to output a MIDI pitch value as the corresponding note name.
+pub struct MidiPitch(pub UniversalImmediateValue);
+impl fmt::Display for MidiPitch {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut pitch_value = self.0;
+        let mut octave = -1;
+        while pitch_value >= 12 {
+            pitch_value -= 12;
+            octave += 1;
+        }
+        let note = match pitch_value {
+            0 => "C",
+            1 => "C#",
+            2 => "D",
+            3 => "D#",
+            4 => "E",
+            5 => "F",
+            6 => "F#",
+            7 => "G",
+            8 => "G#",
+            9 => "A",
+            10 => "A#",
+            11 => "B",
+            _ => unreachable!(),
+        };
+        write!(f, "{}{}", note, octave)
+    }
+}
+impl From<u8> for MidiPitch {
+    fn from(value: u8) -> Self {
+        Self(value.into())
+    }
+}
+impl From<UniversalImmediateValue> for MidiPitch {
+    fn from(value: u32) -> Self {
+        Self(value)
+    }
+}
+impl From<&u8> for MidiPitch {
+    fn from(value: &u8) -> Self {
+        Self((*value).into())
+    }
+}
+impl From<&UniversalImmediateValue> for MidiPitch {
+    fn from(value: &UniversalImmediateValue) -> Self {
+        Self(*value)
     }
 }
 
