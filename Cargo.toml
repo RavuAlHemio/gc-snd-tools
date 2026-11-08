@@ -4,6 +4,7 @@ members = [
     "banker",
     "biscuit",
     "bst",
+    "doltool",
     "gcst-bms",
     "gcst-common",
     "wsyster",
@@ -11,6 +12,8 @@ members = [
 resolver = "3"
 
 [workspace.dependencies]
+arrayvec = { version = "0.7.8" }
+bitflags = { version = "2.13.2" }
 clap = { version = "4.6.7" }
 ordered-float = { version = "5.5" }
 serde = { version = "1.0.229" }

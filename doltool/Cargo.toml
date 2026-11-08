@@ -1,0 +1,9 @@
+[package]
+name = "doltool"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+arrayvec = { workspace = true }
+bitflags = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
