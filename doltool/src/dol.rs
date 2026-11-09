@@ -231,10 +231,10 @@ impl DolFile {
             .zip(header.text_sizes.iter())
             .map(|((a, o), s)| (*a, *o, *s));
         let mut text_sections = ArrayVec::new();
-        for (address, offset, size_u32s) in text_section_values {
+        for (address, offset, size_u32) in text_section_values {
             reader.seek(SeekFrom::Start(offset.into()))?;
-            let size_u8s = usize::try_from(size_u32s).unwrap() * 4;
-            let mut data = vec![0u8; size_u8s];
+            let size: usize = size_u32.try_into().unwrap();
+            let mut data = vec![0u8; size];
             reader.read_exact(&mut data)?;
 
             text_sections.push(SectionWithData {
@@ -248,10 +248,10 @@ impl DolFile {
             .zip(header.data_sizes.iter())
             .map(|((a, o), s)| (*a, *o, *s));
         let mut data_sections = ArrayVec::new();
-        for (address, offset, size_u32s) in data_section_values {
+        for (address, offset, size_u32) in data_section_values {
             reader.seek(SeekFrom::Start(offset.into()))?;
-            let size_u8s = usize::try_from(size_u32s).unwrap() * 4;
-            let mut data = vec![0u8; size_u8s];
+            let size: usize = size_u32.try_into().unwrap();
+            let mut data = vec![0u8; size];
             reader.read_exact(&mut data)?;
 
             data_sections.push(SectionWithData {
