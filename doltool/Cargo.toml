@@ -7,3 +7,5 @@ edition = "2024"
 arrayvec = { workspace = true }
 bitflags = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
+goblin = { workspace = true }
+scroll = { workspace = true }
