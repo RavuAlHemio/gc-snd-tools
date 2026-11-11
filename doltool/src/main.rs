@@ -26,7 +26,7 @@ use goblin::elf32::sym::{STB_GLOBAL, STT_NOTYPE, STV_DEFAULT, Sym};
 use goblin::options::ParseOptions;
 use scroll::ctx::SizeWith;
 
-use crate::dol::{DolFile, DolHeader};
+use crate::dol::{DolFile, DolHeader, SectionWithData};
 use crate::elf::{ElfWriteExt, PadExt};
 
 
@@ -548,8 +548,43 @@ fn main() {
             let elf = Elf::parse(&elf_buf)
                 .expect("failed to parse ELF file");
 
-            println!("{:#?}", elf);
-            todo!();
+            let mut dol = DolFile::default();
+            for section in &elf.section_headers {
+                if section.sh_type == SHT_PROGBITS {
+                    if section.sh_addr == 0 || section.sh_size == 0 {
+                        // nah
+                        continue;
+                    }
+
+                    // read it
+                    elf_file.seek(SeekFrom::Start(section.sh_offset))
+                        .expect("failed to seek to ELF section start");
+                    let mut buf = vec![0u8; section.sh_size.try_into().unwrap()];
+                    elf_file.read_exact(&mut buf)
+                        .expect("failed to read ELF section");
+                    let dol_section = SectionWithData {
+                        address: section.sh_addr.try_into().unwrap(),
+                        data: buf,
+                    };
+
+                    if section.is_executable() {
+                        // consider it a text section
+                        dol.text_sections.push(dol_section);
+                    } else {
+                        // consider it a data section
+                        dol.data_sections.push(dol_section);
+                    }
+                } else if elf.strtab.get_at(section.sh_name).map(|n| n == ".bss").unwrap_or(false) {
+                    dol.bss.address = section.sh_addr.try_into().unwrap();
+                    dol.bss.size = section.sh_size.try_into().unwrap();
+                }
+            }
+            dol.entry_point = elf.entry.try_into().unwrap();
+
+            let mut dol_file = File::create(&opts.dol_path)
+                .expect("failed to create DOL file");
+            dol.try_write(&mut dol_file)
+                .expect("failed to write DOL file");
         },
         Mode::Dol2Bin(opts) => {
             let mut dol_file = File::open(&opts.dol_path)
