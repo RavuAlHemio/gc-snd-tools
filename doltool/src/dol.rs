@@ -26,6 +26,8 @@ pub(crate) struct DolHeader {
     pub padding: [u32; 7],
 }
 impl DolHeader {
+    pub const fn size() -> usize { 256 }
+
     pub fn to_bytes(&self) -> [u8; 256] {
         let mut u32_buf: ArrayVec<u32, 64> = ArrayVec::new();
 
@@ -270,6 +272,17 @@ impl DolFile {
             entry_point: header.entry_point,
         };
         Ok(ret)
+    }
+
+    /// Obtains the lowest address defined by the file that contains either text (code) or data.
+    ///
+    /// Does not take into consideration the BSS section.
+    pub fn lowest_address(&self) -> u32 {
+        self.text_sections.iter()
+            .chain(self.data_sections.iter())
+            .map(|sec| sec.address)
+            .min()
+            .unwrap_or(0)
     }
 }
 

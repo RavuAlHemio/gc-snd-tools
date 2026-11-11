@@ -5,19 +5,25 @@ mod elf;
 
 use std::collections::BTreeMap;
 use std::fs::File;
-use std::io::{BufRead, BufReader, Cursor, Write};
+use std::io::{BufRead, BufReader, Cursor, Read, Seek, SeekFrom, Write};
 use std::num::ParseIntError;
 use std::path::PathBuf;
 
+use arrayvec::ArrayVec;
 use clap::Parser;
 use goblin::container::{Container, Ctx, Endian};
-use goblin::elf::header::Header;
-use goblin::elf32::header::{EM_PPC, ET_EXEC};
+use goblin::elf::{Elf, Header as AnyElfHeader};
+use goblin::elf32::header::{
+    ELFCLASS32, ELFDATA2MSB, ELFMAG, ELFOSABI_NONE, EM_PPC, ET_EXEC, EV_CURRENT, Header,
+    SIZEOF_EHDR,
+};
+use goblin::elf32::program_header::SIZEOF_PHDR;
 use goblin::elf32::section_header::{
     SectionHeader, SHF_ALLOC, SHF_EXECINSTR, SHF_WRITE, SHN_ABS, SHN_UNDEF, SHT_NOBITS, SHT_NULL,
-    SHT_PROGBITS, SHT_STRTAB, SHT_SYMTAB,
+    SHT_PROGBITS, SHT_STRTAB, SHT_SYMTAB, SIZEOF_SHDR,
 };
 use goblin::elf32::sym::{STB_GLOBAL, STT_NOTYPE, STV_DEFAULT, Sym};
+use goblin::options::ParseOptions;
 use scroll::ctx::SizeWith;
 
 use crate::dol::{DolFile, DolHeader};
@@ -214,11 +220,34 @@ fn main() {
 
             // prepare a minimal ELF file
             let ctx = Ctx::new(Container::Little, Endian::Big);
-            let mut header = Header::new(ctx);
-            header.e_type = ET_EXEC;
-            header.e_machine = EM_PPC;
-            header.e_entry = dol_file.entry_point.into();
-            header.e_shstrndx = 1;
+            let mut header = Header {
+                e_ident: [
+                    ELFMAG[0], ELFMAG[1], ELFMAG[2], ELFMAG[3],
+                    ELFCLASS32,
+                    ELFDATA2MSB,
+                    EV_CURRENT,
+                    ELFOSABI_NONE,
+                    0, // ABI version
+                    0, 0, 0, 0, 0, 0, 0, // padding
+                ],
+                e_type: ET_EXEC,
+                e_machine: EM_PPC,
+                e_version: EV_CURRENT.into(),
+                e_entry: dol_file.entry_point,
+
+                // bunch of defaults
+                e_phoff: 0,
+                e_shoff: 0,
+                e_flags: 0,
+                e_ehsize: SIZEOF_EHDR.try_into().unwrap(),
+                e_phentsize: SIZEOF_PHDR.try_into().unwrap(),
+                e_phnum: 0,
+                e_shentsize: SIZEOF_SHDR.try_into().unwrap(),
+                e_shnum: 0,
+
+                // this one's custom:
+                e_shstrndx: 1,
+            };
 
             // ELF sections:
             // 0: header extension section
@@ -338,11 +367,11 @@ fn main() {
             }
 
             // the section header table starts right after the header
-            let mut offset = Header::size(ctx);
+            let mut offset = Header::size();
             header.e_shoff = offset.try_into().unwrap();
 
             // get section header table sizing
-            let section_header_entry_size = SectionHeader::size_with(&ctx.le);
+            let section_header_entry_size = SectionHeader::size();
             let section_header_count = section_headers.len();
 
             // update the global header with information about the section table
@@ -500,6 +529,129 @@ fn main() {
             std::fs::write(&opts.elf_path, &elf_buf)
                 .expect("failed to write ELF output");
         },
-        _ => todo!("not yet implemented"),
+        Mode::Elf2Dol(opts) => {
+            let mut elf_file = File::open(&opts.elf_path)
+                .expect("failed to open ELF file");
+            let mut elf_header_bs = [0u8; SIZEOF_EHDR];
+            elf_file.read_exact(&mut elf_header_bs)
+                .expect("failed to read ELF header");
+            if &elf_header_bs[0..4] != b"\x7FELF" {
+                panic!("input file is not an ELF file");
+            }
+            if elf_header_bs[4] != ELFCLASS32 {
+                panic!("only 32-bit ELF files are supported");
+            }
+
+            let mut elf_buf = elf_header_bs.to_vec();
+            elf_file.read_to_end(&mut elf_buf)
+                .expect("failed to read ELF file");
+            let elf = Elf::parse(&elf_buf)
+                .expect("failed to parse ELF file");
+
+            println!("{:#?}", elf);
+            todo!();
+        },
+        Mode::Dol2Bin(opts) => {
+            let mut dol_file = File::open(&opts.dol_path)
+                .expect("failed to open DOL file");
+            let dol = DolFile::try_read(&mut dol_file)
+                .expect("failed to read DOL file");
+
+            let mut lowest_addr = dol.lowest_address();
+            let entry_point = dol.entry_point;
+
+            let mut bin_file = File::create(&opts.bin_path)
+                .expect("failed to create BIN file");
+
+            if lowest_addr != entry_point {
+                // let's see if we can squeeze in an absolute jump instruction at the beginning
+                let jump_addr = lowest_addr - 4;
+                let jump_distance = entry_point.wrapping_sub(jump_addr);
+                // check if we can fit into 24 bits if we are sign-extended
+                // aaaa aaaa abcd efgh ijkl mnop qrst uvwx
+                let fits_24 =
+                    (jump_distance & 0xFF80_0000) == 0x0000_0000
+                    || (jump_distance & 0xFF80_0000) == 0xFF80_0000;
+                if fits_24 {
+                    // sweet
+                    lowest_addr -= 4;
+                    let jump_distance_bs = jump_distance.to_be_bytes();
+                    let jump_instruction = [
+                        0x48, // branch always, 24-bit offset
+                        jump_distance_bs[1],
+                        jump_distance_bs[2],
+                        jump_distance_bs[3], // bottom two bits should be 0 to ensure (1) relative jump; (2) jump, not call
+                    ];
+                    bin_file.write_all(&jump_instruction)
+                        .expect("failed to write jump instruction");
+                }
+            }
+
+            // write out our sections at the matching positions in the file
+            let all_sections = dol.text_sections.iter()
+                .chain(dol.data_sections.iter());
+            for section in all_sections {
+                let file_addr = u64::from(section.address - lowest_addr);
+                let mut bin_pos = bin_file.seek(SeekFrom::End(0))
+                    .expect("failed to seek BIN file");
+                if bin_pos < file_addr {
+                    let big_buf = vec![0u8; 65536];
+                    while bin_pos + 65536 < file_addr {
+                        bin_file.write_all(&big_buf)
+                            .expect("failed to extend BIN file");
+                        bin_pos += 65536;
+                    }
+
+                    let rest_count: usize = (file_addr - bin_pos).try_into().unwrap();
+                    let last_buf = vec![0u8; rest_count];
+                    bin_file.write_all(&last_buf)
+                        .expect("failed to extend BIN file");
+                }
+
+                bin_file.write_all(&section.data)
+                    .expect("failed to write BIN file");
+            }
+        },
+        Mode::Bin2Dol(opts) => {
+            let mut bin_file = File::open(&opts.dol_path)
+                .expect("failed to open BIN file");
+            let bin_size = bin_file.seek(SeekFrom::End(0))
+                .expect("failed to seek to end of BIN file to obtain size");
+            bin_file.seek(SeekFrom::Start(0))
+                .expect("failed to seek to start of BIN file");
+            if bin_size > 0xFFFF_FFFF {
+                panic!("BIN file too large to convert to DOL");
+            }
+
+            // squeeze it all into one .text section
+            let mut text_offsets = ArrayVec::new();
+            text_offsets.push(DolHeader::size().try_into().unwrap());
+            let mut text_addresses = ArrayVec::new();
+            text_addresses.push(opts.load_address);
+            let mut text_sizes = ArrayVec::new();
+            text_sizes.push(bin_size.try_into().unwrap());
+            let dol_header = DolHeader {
+                text_offsets,
+                data_offsets: ArrayVec::new(),
+                text_addresses,
+                data_addresses: ArrayVec::new(),
+                text_sizes,
+                data_sizes: ArrayVec::new(),
+                bss_address: 0,
+                bss_size: 0,
+                entry_point: opts.entry_point,
+                padding: [0, 0, 0, 0, 0, 0, 0],
+            };
+            let dol_header_bs = dol_header.to_bytes();
+
+            let mut dol_file = File::create(&opts.dol_path)
+                .expect("failed to create DOL file");
+            dol_file.write_all(&dol_header_bs)
+                .expect("failed to write DOL header");
+
+            // the rest we just copy over
+            std::io::copy(&mut bin_file, &mut dol_file)
+                .expect("failed to copy BIN contents to DOL payload");
+        },
     }
 }

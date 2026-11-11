@@ -1,23 +1,18 @@
 use std::io::{self, Cursor, Write};
 
 use goblin::container::Ctx;
-use scroll::{IOwrite, Pwrite};
-use scroll::ctx::SizeWith;
+use scroll::IOwrite;
 
 
 pub trait ElfWriteExt {
+    fn size() -> usize;
     fn write_elf<W: Write>(&self, target: &mut W, ctx: Ctx) -> Result<(), io::Error>;
 }
-impl ElfWriteExt for goblin::elf::Header {
-    fn write_elf<W: Write>(&self, target: &mut W, ctx: Ctx) -> Result<(), io::Error> {
-        let size = goblin::elf::Header::size_with(&ctx);
-        let mut buf = vec![0u8; size];
-        buf.pwrite_with(*self, 0, ctx.le).unwrap();
-
-        target.write_all(&buf)
-    }
-}
 impl ElfWriteExt for goblin::elf32::header::Header {
+    fn size() -> usize {
+        goblin::elf32::header::header32::SIZEOF_EHDR
+    }
+
     fn write_elf<W: Write>(&self, target: &mut W, ctx: Ctx) -> Result<(), io::Error> {
         target.write_all(&self.e_ident)?;
         target.iowrite_with(self.e_type, ctx.le)?;
@@ -37,6 +32,10 @@ impl ElfWriteExt for goblin::elf32::header::Header {
     }
 }
 impl ElfWriteExt for goblin::elf32::section_header::SectionHeader {
+    fn size() -> usize {
+        goblin::elf32::section_header::section_header32::SIZEOF_SHDR
+    }
+
     fn write_elf<W: Write>(&self, target: &mut W, ctx: Ctx) -> Result<(), io::Error> {
         target.iowrite_with(self.sh_name, ctx.le)?;
         target.iowrite_with(self.sh_type, ctx.le)?;
@@ -52,6 +51,10 @@ impl ElfWriteExt for goblin::elf32::section_header::SectionHeader {
     }
 }
 impl ElfWriteExt for goblin::elf32::sym::Sym {
+    fn size() -> usize {
+        goblin::elf32::sym::sym32::SIZEOF_SYM
+    }
+
     fn write_elf<W: Write>(&self, target: &mut W, ctx: Ctx) -> Result<(), io::Error> {
         target.iowrite_with(self.st_name, ctx.le)?;
         target.iowrite_with(self.st_value, ctx.le)?;
